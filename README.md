@@ -7,7 +7,15 @@ This repository serves as a template for speeding up project scaffolding for Go 
 - **Dockerfile**: Pre-configured Dockerfile for containerizing your Go application.
 - **.golangci.yml**: Configuration for `golangci-lint`, which runs `revive`, `staticcheck` and other linters.
 - **tools/go.mod**: Pins `golangci-lint`, `sqlc` and `govulncheck`, run with `go tool -modfile=tools/go.mod`.
-- **Makefile**: `fmt`, `lint`, `test`, `vuln`, `build`, `run`, `db-up` and `db-down`, all on the Go version in `go.mod`.
+- **Makefile**: `fmt`, `lint`, `test`, `vuln`, `build`, `run`, `db-up`, `db-down`, `generate`,
+  `migrate-diff` and `migrate-apply`, all on the Go version in `go.mod`.
+- **Database**: `db/schema.sql` is the schema as it should be. [Atlas](https://atlasgo.io)
+  (Community edition) writes migrations from it into `db/migrations`, and
+  [sqlc](https://sqlc.dev) turns the queries in `db/queries` into typed Go in `internal/db`.
+- **Example feature, tasks**: `internal/task` holds the rules (titles trimmed, 1–200 characters,
+  unique) and turns database errors into `apperr` kinds; `internal/api/tasks.go` serves
+  `POST/GET /tasks` (newest first, paged with `?limit=` and `?after=<next_cursor>`) and
+  `GET/PATCH/DELETE /tasks/{id}`. Copy its shape for new features, then delete it.
 - **compose.yaml**: Postgres 17 for local runs.
 - **.example.env**: Every setting the app reads, with local defaults.
 - **zerolog**: A fast and structured logger for Go.
@@ -29,6 +37,8 @@ This repository serves as a template for speeding up project scaffolding for Go 
 
 - Go 1.21 or newer (`make` downloads the exact version in `go.mod`)
 - Docker
+- [Atlas](https://atlasgo.io), Community edition: `brew install atlas` (Homebrew's build is the
+  Apache-2.0 Community one; `atlas version` says "community")
 
 ### Installation
 
@@ -45,12 +55,20 @@ This repository serves as a template for speeding up project scaffolding for Go 
    cp .example.env .env
    ```
 
-3. Start Postgres, then run the application:
+3. Start Postgres, apply the migrations, then run the application:
 
    ```sh
    make db-up
+   make migrate-apply
    make run
    ```
+
+### Changing the database
+
+1. Edit `db/schema.sql` (and the queries in `db/queries`).
+2. `make migrate-diff name=<what_changed>` writes the migration into `db/migrations`. Commit it with
+   `atlas.sum`, which Atlas uses to detect edited or missing migration files.
+3. `make generate` updates `internal/db`; `make migrate-apply` applies the migration locally.
 
    If another Postgres already uses port 5432, change `POSTGRES_PORT` and the port in
    `DATABASE_URL` in `.env`.

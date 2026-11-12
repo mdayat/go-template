@@ -7,7 +7,12 @@ export GOTOOLCHAIN := go$(shell sed -n 's/^go //p' go.mod)
 # Linter, sqlc and govulncheck are pinned in tools/go.mod, apart from the app's own dependencies.
 TOOL := go tool -modfile=tools/go.mod
 
-.PHONY: fmt lint test vuln build run db-up db-down
+# migrate-apply uses DATABASE_URL from the environment, else from .env, the same order the app uses.
+# (Not `include .env`: a value from an included file would beat the environment.) Reads the forms
+# the app's .env loader accepts: KEY=value, KEY="value", KEY='value', export KEY=value.
+export DATABASE_URL ?= $(shell sed -nE "s/^(export[[:space:]]+)?DATABASE_URL=[\"']?([^\"']*)[\"']?[[:space:]]*$$/\2/p" .env 2>/dev/null | tail -n 1)
+
+.PHONY: fmt lint test vuln build run db-up db-down generate migrate-diff migrate-apply
 
 fmt:
 	$(TOOL) golangci-lint fmt ./...
@@ -32,3 +37,16 @@ db-up:
 
 db-down:
 	docker compose down
+
+# Regenerate internal/db from db/queries and db/schema.sql.
+generate:
+	$(TOOL) sqlc generate
+
+# Write a migration for the difference between db/schema.sql and db/migrations (needs Docker).
+migrate-diff:
+	@test -n "$(name)" || { echo "usage: make migrate-diff name=<what_changed>"; exit 1; }
+	atlas migrate diff --env local $(name)
+
+migrate-apply:
+	@test -n "$$DATABASE_URL" || { echo "DATABASE_URL is not set (in the environment or .env)"; exit 1; }
+	atlas migrate apply --env local

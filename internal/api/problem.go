@@ -131,9 +131,12 @@ func writeJSON(w http.ResponseWriter, status int, contentType string, v any) {
 		panic("marshal reply: " + err.Error())
 	}
 	w.Header().Set("Content-Type", contentType)
+	// Replies can echo client input (a field name in an error); nosniff stops a browser from
+	// guessing they're HTML and running them.
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(status)
 	// A write error means the client is gone; there's no one left to tell.
-	_, _ = w.Write(body)
+	_, _ = w.Write(body) //nolint:gosec // G705: always a JSON content type with nosniff, never HTML
 }
 
 // recordError attaches err to the request's summary log line (written by logRequests). A request

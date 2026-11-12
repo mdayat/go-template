@@ -7,16 +7,19 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/hlog"
+
+	"github.com/mdayat/go-template/internal/task"
 )
 
 const healthPath = "/healthz"
 
 // NewRouter returns the API's routes, each request logged to logger.
-func NewRouter(logger zerolog.Logger) *chi.Mux {
+func NewRouter(logger zerolog.Logger, tasks *task.Service) *chi.Mux {
 	router := newBaseRouter(logger)
 	router.Get(healthPath, func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
+	taskRoutes{tasks: tasks, decoder: newBodyDecoder()}.mount(router)
 	return router
 }
 

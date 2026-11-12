@@ -30,8 +30,7 @@ linters:
     # HTTP, database, logging
     - bodyclose
     - noctx
-    - rowserrcheck
-    - sqlclosecheck
+    - rowserrcheck # rows.Err() checked after a row loop (needs the pgx packages below)
     - zerologlint # zerolog events that are never sent
     - musttag
     # security
@@ -44,6 +43,12 @@ linters:
     - nolintlint
 
   settings:
+    # Without these it only checks database/sql and stays silent on pgx. (sqlclosecheck isn't
+    # enabled: it doesn't catch unclosed pgx rows either way.)
+    rowserrcheck:
+      packages:
+        - github.com/jackc/pgx/v5
+        - github.com/jackc/pgx/v5/pgxpool
     revive:
       rules:
         - name: blank-imports

@@ -1,0 +1,18 @@
+version: "2"
+sql:
+  - engine: postgresql
+    schema: db/schema.sql
+    queries: db/queries
+    gen:
+      go:
+        package: db
+        out: internal/db
+        sql_package: pgx/v5
+        # Nullable query arguments become *string, *bool, ... instead of pgtype wrappers.
+        emit_pointers_for_null_types: true
+        # Plain Go types instead of pgx's pgtype.UUID / pgtype.Timestamptz.
+        overrides:
+          - db_type: uuid
+            go_type: github.com/google/uuid.UUID
+          - db_type: timestamptz
+            go_type: time.Time
