@@ -7,7 +7,7 @@ export GOTOOLCHAIN := go$(shell sed -n 's/^go //p' go.mod)
 # Linter, sqlc and govulncheck are pinned in tools/go.mod, apart from the app's own dependencies.
 TOOL := go tool -modfile=tools/go.mod
 
-.PHONY: fmt lint test vuln build run
+.PHONY: fmt lint test vuln build run db-up db-down
 
 fmt:
 	$(TOOL) golangci-lint fmt ./...
@@ -22,7 +22,13 @@ vuln:
 	$(TOOL) govulncheck ./...
 
 build: lint
-	go build -o app .
+	go build -o app ./cmd/api
 
 run:
-	go run .
+	go run ./cmd/api
+
+db-up:
+	docker compose up -d --wait
+
+db-down:
+	docker compose down
