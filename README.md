@@ -13,6 +13,8 @@ This repository serves as a template for speeding up project scaffolding for Go 
 - **zerolog**: A fast and structured logger for Go.
 - **`internal/config`**: Loads settings from the environment and reports every missing or invalid one at once.
 - **`cmd/api`**: HTTP server with a `/healthz` check and clean shutdown on Ctrl-C or SIGTERM.
+- **`internal/api`**: Routes, plus one JSON log line per request with a request ID (also sent back as
+  `X-Request-Id`). Query strings, headers and bodies are never logged.
 - **GitHub Workflow**: Pre-configured GitHub Actions workflow for code quality checks.
 
 ## Getting Started

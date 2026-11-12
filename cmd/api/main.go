@@ -9,14 +9,15 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"syscall"
 	"time"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
+	"github.com/mdayat/go-template/internal/api"
 	"github.com/mdayat/go-template/internal/config"
 )
 
@@ -53,7 +54,8 @@ func run() error {
 	defer pool.Close()
 
 	server := &http.Server{
-		Handler:           newRouter(),
+		Handler:           api.NewRouter(log.Logger),
+		ErrorLog:          api.ServerErrorLog(log.Logger),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      10 * time.Second,
@@ -65,7 +67,7 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("listen on %s: %w", cfg.HTTPAddr, err)
 	}
-	log.Info().Str("addr", listener.Addr().String()).Msg("api listening")
+	log.Info().Str("addr", listener.Addr().String()).Str("version", version()).Msg("api listening")
 
 	serveErr := make(chan error, 1)
 	go func() {
@@ -101,6 +103,33 @@ func setupLogger(cfg config.Config) {
 	if cfg.AppEnv == config.EnvDevelopment {
 		log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
 	}
+	// zerolog.Ctx on a context without a logger returns this one; the default drops every line.
+	zerolog.DefaultContextLogger = &log.Logger
+}
+
+// version is the git commit the binary was built from, with "-dirty" if it had uncommitted
+// changes. `go run` and builds outside a git checkout don't record one.
+func version() string {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return "unknown"
+	}
+	var revision, modified string
+	for _, s := range info.Settings {
+		switch s.Key {
+		case "vcs.revision":
+			revision = s.Value
+		case "vcs.modified":
+			modified = s.Value
+		}
+	}
+	if revision == "" {
+		return "unknown"
+	}
+	if modified == "true" {
+		revision += "-dirty"
+	}
+	return revision
 }
 
 func connectDB(ctx context.Context, url string) (*pgxpool.Pool, error) {
@@ -117,12 +146,4 @@ func connectDB(ctx context.Context, url string) (*pgxpool.Pool, error) {
 		return nil, fmt.Errorf("connect to database at %s:%d: %w", conn.Host, conn.Port, err)
 	}
 	return pool, nil
-}
-
-func newRouter() *chi.Mux {
-	router := chi.NewRouter()
-	router.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})
-	return router
 }
