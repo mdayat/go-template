@@ -60,9 +60,20 @@ func logLines(t *testing.T, logs *bytes.Buffer) []map[string]any {
 	return lines
 }
 
-func summaryLine(level, method, path, route string, status, size int) map[string]any {
+// lineSpec is the part of a summary line that differs between test cases.
+type lineSpec struct {
+	level  string
+	route  string
+	status int
+	size   int
+}
+
+// replySize as a lineSpec size means "the size of the reply the client got".
+const replySize = -1
+
+func summaryLine(level, path, route string, status, size int) map[string]any {
 	httpFields := map[string]any{
-		"request":  map[string]any{"method": method},
+		"request":  map[string]any{"method": http.MethodGet},
 		"response": map[string]any{"status_code": float64(status), "body": map[string]any{"bytes": float64(size)}},
 	}
 	if route != "" {
@@ -85,38 +96,38 @@ func TestLogRequests(t *testing.T) {
 		name       string
 		target     string
 		clientGone bool
-		want       []map[string]any
+		want       []lineSpec
 	}{
 		{
 			name:   "success is logged at info with the route",
 			target: "/ok",
-			want:   []map[string]any{summaryLine("info", "GET", "/ok", "/ok", 200, 5)},
+			want:   []lineSpec{{"info", "/ok", 200, 5}},
 		},
 		{
 			name:   "route pattern groups requests, path keeps the ID",
 			target: "/users/42",
-			want:   []map[string]any{summaryLine("info", "GET", "/users/42", "/users/{id}", 204, 0)},
+			want:   []lineSpec{{"info", "/users/{id}", 204, 0}},
 		},
 		{
 			name:   "5xx is logged at error",
 			target: "/fail",
-			want:   []map[string]any{summaryLine("error", "GET", "/fail", "/fail", 500, 0)},
+			want:   []lineSpec{{"error", "/fail", 500, 0}},
 		},
 		{
 			name:   "unknown path is a 4xx at info with no route",
 			target: "/nope",
-			want:   []map[string]any{summaryLine("info", "GET", "/nope", "", 404, 19)},
+			want:   []lineSpec{{"info", "", 404, replySize}},
 		},
 		{
 			name:   "handler that writes nothing is logged as the 200 net/http sends",
 			target: "/silent",
-			want:   []map[string]any{summaryLine("info", "GET", "/silent", "/silent", 200, 0)},
+			want:   []lineSpec{{"info", "/silent", 200, 0}},
 		},
 		{
 			name:       "client that hung up before any reply is logged as 499, not 200",
 			target:     "/silent",
 			clientGone: true,
-			want:       []map[string]any{summaryLine("info", "GET", "/silent", "/silent", 499, 0)},
+			want:       []lineSpec{{"info", "/silent", 499, 0}},
 		},
 		{
 			name:   "successful health check is not logged",
@@ -126,7 +137,7 @@ func TestLogRequests(t *testing.T) {
 		{
 			name:   "failing health check is logged",
 			target: healthPath + "?down",
-			want:   []map[string]any{summaryLine("error", "GET", healthPath, healthPath, 503, 0)},
+			want:   []lineSpec{{"error", healthPath, 503, 0}},
 		},
 	}
 
@@ -144,9 +155,18 @@ func TestLogRequests(t *testing.T) {
 			}
 			req := httptest.NewRequestWithContext(ctx, http.MethodGet, tt.target, nil)
 			req.Header.Set("User-Agent", "test-agent")
-			router.ServeHTTP(httptest.NewRecorder(), req)
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
 
-			if diff := cmp.Diff(tt.want, logLines(t, logs)); diff != "" {
+			var want []map[string]any
+			for _, s := range tt.want {
+				size := s.size
+				if size == replySize {
+					size = rec.Body.Len()
+				}
+				want = append(want, summaryLine(s.level, req.URL.Path, s.route, s.status, size))
+			}
+			if diff := cmp.Diff(want, logLines(t, logs)); diff != "" {
 				t.Errorf("log lines mismatch (-want +got):\n%s", diff)
 			}
 		})
@@ -193,48 +213,131 @@ func TestLogRequestsKeepsSecretsOut(t *testing.T) {
 	}
 }
 
-// A panic must not produce a summary line claiming success; net/http recovers it and reports it
-// through ServerErrorLog as one JSON line.
-func TestPanicGoesToServerErrorLogOnly(t *testing.T) {
-	t.Parallel()
+// served is what a client and the log saw for one request.
+type served struct {
+	status      int
+	contentType string
+	body        []byte
+	err         error // sending the request or reading the reply failed
+	lines       []map[string]any
+}
+
+// serveOnce sends one GET through a real server whose ErrorLog shares the router's log, then waits
+// for the handler to finish.
+func serveOnce(t *testing.T, path string, handler http.HandlerFunc) served {
+	t.Helper()
 	var logs bytes.Buffer
 	logger := zerolog.New(&logs)
 	router := newBaseRouter(logger)
-	router.Get("/panic", func(http.ResponseWriter, *http.Request) {
-		panic("boom")
-	})
+	router.Get(path, handler)
 
 	server := httptest.NewUnstartedServer(router)
 	server.Config.ErrorLog = ServerErrorLog(logger)
 	server.Start()
 	t.Cleanup(server.Close)
 
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, server.URL+"/panic", nil)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, server.URL+path, nil)
 	if err != nil {
 		t.Fatalf("build request: %v", err)
 	}
+	var got served
 	res, err := server.Client().Do(req)
 	if err == nil {
-		_, _ = io.Copy(io.Discard, res.Body)
+		got.status, got.contentType = res.StatusCode, res.Header.Get("Content-Type")
+		got.body, err = io.ReadAll(res.Body)
 		_ = res.Body.Close()
-		t.Fatalf("GET /panic = %d, want the connection closed", res.StatusCode)
 	}
-	server.Close() // waits for the handler goroutine, so its log line is written
+	got.err = err
+	server.Close() // waits for the handler, so its log lines are written
 
-	var got []map[string]any
 	for raw := range strings.SplitSeq(strings.TrimSpace(logs.String()), "\n") {
+		if raw == "" {
+			continue
+		}
 		var line map[string]any
 		if err := json.Unmarshal([]byte(raw), &line); err != nil {
 			t.Fatalf("log line is not JSON: %q: %v", raw, err)
 		}
-		got = append(got, line)
+		got.lines = append(got.lines, line)
 	}
-	if len(got) != 1 {
-		t.Fatalf("got %d log lines, want 1 (no summary line):\n%s", len(got), logs.String())
+	return got
+}
+
+// lineSummary is the level, status and error fields of a summary line.
+type lineSummary struct {
+	level   string
+	status  float64
+	message string
+	stack   string
+}
+
+func summarize(line map[string]any) lineSummary {
+	var s lineSummary
+	s.level, _ = line["level"].(string)
+	httpFields, _ := line["http"].(map[string]any)
+	response, _ := httpFields["response"].(map[string]any)
+	s.status, _ = response["status_code"].(float64)
+	errFields, _ := line["error"].(map[string]any)
+	s.message, _ = errFields["message"].(string)
+	s.stack, _ = errFields["stack_trace"].(string)
+	return s
+}
+
+func TestPanicBeforeReplyBecomes500(t *testing.T) {
+	t.Parallel()
+	got := serveOnce(t, "/panic", func(http.ResponseWriter, *http.Request) {
+		panic("boom")
+	})
+	if got.err != nil {
+		t.Fatalf("GET /panic: %v", got.err)
 	}
-	message, _ := got[0]["message"].(string)
-	if got[0]["level"] != "error" || got[0]["source"] != "net/http" || !strings.Contains(message, "panic serving") {
-		t.Errorf("server error line = %v, want an error from net/http about the panic", got[0])
+
+	if got.status != http.StatusInternalServerError || got.contentType != "application/problem+json" {
+		t.Errorf("reply = %d %q, want 500 application/problem+json", got.status, got.contentType)
+	}
+	if strings.Contains(string(got.body), "boom") {
+		t.Errorf("reply leaks the panic value: %s", got.body)
+	}
+	if len(got.lines) != 1 {
+		t.Fatalf("got %d log lines, want 1 summary line:\n%v", len(got.lines), got.lines)
+	}
+	s := summarize(got.lines[0])
+	if s.level != "error" || s.status != 500 || s.message != "panic: boom" || !strings.Contains(s.stack, "logging_test.go") {
+		t.Errorf("summary line = %+v, want error level, 500, \"panic: boom\", stack naming logging_test.go", s)
+	}
+}
+
+func TestPanicMidReplyCutsTheConnection(t *testing.T) {
+	t.Parallel()
+	got := serveOnce(t, "/panic-mid", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("partial"))
+		_ = http.NewResponseController(w).Flush()
+		panic("mid")
+	})
+
+	// Without the cut, the client would read "partial" as a complete 200 reply.
+	if got.err == nil {
+		t.Errorf("client read %q without error, want the connection cut", got.body)
+	}
+	if len(got.lines) != 1 {
+		t.Fatalf("got %d log lines, want 1 summary line (net/http must not log the abort):\n%v", len(got.lines), got.lines)
+	}
+	if s := summarize(got.lines[0]); s.level != "error" || s.status != 200 || s.message != "panic: mid" {
+		t.Errorf("summary line = %+v, want error level, 200, \"panic: mid\"", s)
+	}
+}
+
+func TestAbortHandlerPassesThrough(t *testing.T) {
+	t.Parallel()
+	got := serveOnce(t, "/abort", func(http.ResponseWriter, *http.Request) {
+		panic(http.ErrAbortHandler)
+	})
+
+	if got.err == nil {
+		t.Errorf("client got a %d reply, want the connection cut", got.status)
+	}
+	if len(got.lines) != 0 {
+		t.Errorf("got log lines for a deliberate abort, want none:\n%v", got.lines)
 	}
 }
 

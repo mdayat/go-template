@@ -1,9 +1,12 @@
 package api
 
 import (
+	"errors"
+	"fmt"
 	stdlog "log"
 	"net"
 	"net/http"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"time"
@@ -18,17 +21,16 @@ import (
 // "client closed request"; no reply carries it.
 const statusClientClosed = 499
 
-// logRequests writes one summary line per request after the handler returns: error level for 5xx
-// replies, info for the rest. Successful health checks aren't logged. The query string, headers and
-// bodies are never logged: they can hold tokens and personal data.
-//
-// It logs only when the handler returns normally, not from a defer: after a panic no status has been
-// written yet, so the line would claim a 200. The server's error log records the panic instead.
+// logRequests writes one summary line per request: error level for 5xx replies and panics, info for
+// the rest. Successful health checks aren't logged. The query string, headers and bodies are never
+// logged: they can hold tokens and personal data. A handler's returned error (see Handle) or panic
+// is attached to this line, so each request is logged exactly once.
 func logRequests(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
-		next.ServeHTTP(ww, r)
+		var rec recovery
+		rec.serve(next, ww, r)
 
 		status := ww.Status()
 		if status == 0 {
@@ -44,7 +46,7 @@ func logRequests(next http.Handler) http.Handler {
 		}
 
 		level := zerolog.InfoLevel
-		if status >= http.StatusInternalServerError {
+		if status >= http.StatusInternalServerError || rec.panicked {
 			level = zerolog.ErrorLevel
 		}
 
@@ -65,7 +67,49 @@ func logRequests(next http.Handler) http.Handler {
 			Dict("client", clientFields(r.RemoteAddr)).
 			Float64("duration_ms", float64(time.Since(start))/float64(time.Millisecond)).
 			Msg("request completed")
+
+		if rec.midReply {
+			// Part of the reply is already out. Ending normally would let the client take it as
+			// complete; this makes net/http cut the connection, without logging it again.
+			panic(http.ErrAbortHandler)
+		}
 	})
+}
+
+// recovery is what serve saw: whether the handler panicked, and whether the reply had already
+// started when it did.
+type recovery struct {
+	panicked bool
+	midReply bool
+}
+
+// serve runs next and recovers a panic: it attaches the panic and stack to the summary line and
+// replies 500, or, if the reply had already started, sets midReply so the caller cuts the
+// connection after logging. http.ErrAbortHandler, a deliberate abort, passes through untouched.
+func (rec *recovery) serve(next http.Handler, ww middleware.WrapResponseWriter, r *http.Request) {
+	defer func() {
+		p := recover()
+		if p == nil {
+			return
+		}
+		if err, ok := p.(error); ok && errors.Is(err, http.ErrAbortHandler) {
+			panic(p)
+		}
+
+		rec.panicked = true
+		hlog.FromRequest(r).UpdateContext(func(c zerolog.Context) zerolog.Context {
+			return c.Dict("error", zerolog.Dict().
+				Str("message", fmt.Sprintf("panic: %v", p)).
+				Str("stack_trace", string(debug.Stack())))
+		})
+		if ww.Status() != 0 {
+			rec.midReply = true
+			return
+		}
+		writeProblem(ww, r, newProblem(http.StatusInternalServerError, internalErrorDetail))
+	}()
+
+	next.ServeHTTP(ww, r)
 }
 
 // clientFields splits the connection's address into ip and port, so logs can be grouped by caller.
@@ -81,8 +125,9 @@ func clientFields(remoteAddr string) *zerolog.Event {
 	return fields
 }
 
-// ServerErrorLog returns a logger for http.Server.ErrorLog, so the server's own errors (a handler
-// panic it recovered, a broken connection) reach the JSON log instead of plain-text stderr.
+// ServerErrorLog returns a logger for http.Server.ErrorLog, so the server's own errors (a panic in
+// middleware that runs before logRequests, a broken connection) reach the JSON log instead of
+// plain-text stderr.
 func ServerErrorLog(logger zerolog.Logger) *stdlog.Logger {
 	return stdlog.New(serverErrorWriter{logger: logger}, "", 0)
 }

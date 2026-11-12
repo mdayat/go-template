@@ -14,7 +14,11 @@ This repository serves as a template for speeding up project scaffolding for Go 
 - **`internal/config`**: Loads settings from the environment and reports every missing or invalid one at once.
 - **`cmd/api`**: HTTP server with a `/healthz` check and clean shutdown on Ctrl-C or SIGTERM.
 - **`internal/api`**: Routes, plus one JSON log line per request with a request ID (also sent back as
-  `X-Request-Id`). Query strings, headers and bodies are never logged.
+  `X-Request-Id`). Query strings, headers and bodies are never logged. Handlers return errors;
+  `Handle` turns them into [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) replies, and panics
+  become 500 replies with the stack on the request's log line.
+- **`internal/apperr`**: The kinds of expected failure (bad request, invalid, not found, conflict)
+  services return, with a message safe to show callers. Any other error is a 500.
 - **GitHub Workflow**: Pre-configured GitHub Actions workflow for code quality checks.
 
 ## Getting Started

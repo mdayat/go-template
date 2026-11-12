@@ -20,7 +20,8 @@ func NewRouter(logger zerolog.Logger) *chi.Mux {
 	return router
 }
 
-// newBaseRouter returns a router with the middleware every route shares and no routes yet.
+// newBaseRouter returns a router with the middleware every route shares, problem replies for
+// unmatched paths and methods, and no routes yet.
 func newBaseRouter(logger zerolog.Logger) *chi.Mux {
 	router := chi.NewRouter()
 	router.Use(
@@ -29,5 +30,7 @@ func newBaseRouter(logger zerolog.Logger) *chi.Mux {
 		hlog.RequestIDHandler("request_id", "X-Request-Id"),
 		logRequests,
 	)
+	router.NotFound(notFound)
+	router.MethodNotAllowed(methodNotAllowed(router))
 	return router
 }
