@@ -12,7 +12,7 @@ TOOL := go tool -modfile=tools/go.mod
 # the app's .env loader accepts: KEY=value, KEY="value", KEY='value', export KEY=value.
 export DATABASE_URL ?= $(shell sed -nE "s/^(export[[:space:]]+)?DATABASE_URL=[\"']?([^\"']*)[\"']?[[:space:]]*$$/\2/p" .env 2>/dev/null | tail -n 1)
 
-.PHONY: fmt lint test test-db-clean vuln build image run db-up db-down generate check-generated \
+.PHONY: fmt lint test test-db-clean vuln build rename image run db-up db-down generate check-generated \
 	migrate-diff migrate-apply
 
 fmt:
@@ -36,6 +36,22 @@ vuln:
 
 build: lint
 	go build -o app ./cmd/api
+
+# Run once in a project copied from the template: make rename module=example.com/you/app
+# Renames the module in both go.mod files, Go imports and the linter's import grouping, and sets
+# IMAGE to the module's last part (lowercase, as Docker requires; a /v2-style suffix skipped).
+# README links are left to edit by hand.
+rename:
+	@test -n "$(module)" || { echo "usage: make rename module=<new module path>"; exit 1; }
+	@old=$$(go list -m) && \
+		image=$$(echo "$(module)" | sed -E 's|/v[0-9]+$$||; s|.*/||' | tr '[:upper:]' '[:lower:]') && \
+		go mod edit -module "$(module)" && \
+		(cd tools && go mod edit -module "$(module)/tools") && \
+		grep -rlF --include='*.go' --include='.golangci.yml' "$$old" . \
+			| xargs perl -pi -e "s|\Q$$old\E|$(module)|g" && \
+		perl -pi -e "s|^IMAGE \\?= .*|IMAGE ?= $$image|" Makefile && \
+		$(TOOL) golangci-lint fmt ./... && \
+		echo "Renamed $$old to $(module)."
 
 IMAGE ?= go-template
 

@@ -1,10 +1,35 @@
 package testdb
 
 import (
+	"path/filepath"
 	"testing"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func TestMain(m *testing.M) { Main(m) }
+
+// checkEveryMigrationApplied compares the migrations Atlas recorded in the database with the files
+// in db/migrations, so it holds whatever tables a project has.
+func checkEveryMigrationApplied(t *testing.T, pool *pgxpool.Pool) {
+	t.Helper()
+	root, err := repoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, err := filepath.Glob(filepath.Join(root, "db", "migrations", "*.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var applied int
+	err = pool.QueryRow(t.Context(), "SELECT count(*) FROM atlas_schema_revisions.atlas_schema_revisions").Scan(&applied)
+	if err != nil {
+		t.Fatalf("read applied migrations: %v", err)
+	}
+	if applied != len(files) {
+		t.Errorf("applied migrations = %d, want %d (one per file in db/migrations)", applied, len(files))
+	}
+}
 
 func TestLocalURLRefusesOtherHosts(t *testing.T) {
 	t.Parallel()
@@ -46,9 +71,10 @@ func TestNewGivesEachTestItsOwnMigratedDatabase(t *testing.T) {
 			t.Run(sub, func(t *testing.T) {
 				t.Parallel()
 				pool := New(t)
-				// The same title in both: it only fits if the databases are separate.
-				if _, err := pool.Exec(t.Context(), "INSERT INTO tasks (title) VALUES ('same title')"); err != nil {
-					t.Fatalf("insert into the migrated tasks table: %v", err)
+				checkEveryMigrationApplied(t, pool)
+				// The same table in both: creating it twice only works if the databases are separate.
+				if _, err := pool.Exec(t.Context(), "CREATE TABLE testdb_probe (id int)"); err != nil {
+					t.Fatalf("create table: %v", err)
 				}
 				var name string
 				if err := pool.QueryRow(t.Context(), "SELECT current_database()").Scan(&name); err != nil {

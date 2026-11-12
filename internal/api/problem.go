@@ -96,9 +96,10 @@ func problemFor(err error) problem {
 		return newProblem(http.StatusNotFound, appErr.Detail)
 	case apperr.KindConflict:
 		return newProblem(http.StatusConflict, appErr.Detail)
-	default:
-		return newProblem(http.StatusInternalServerError, internalErrorDetail)
 	}
+	// After the switch, not as its default: with no default case the linter (exhaustive) fails until
+	// a new kind gets its own case. Only a zero or made-up Kind gets here.
+	return newProblem(http.StatusInternalServerError, internalErrorDetail)
 }
 
 func newProblem(status int, detail string) problem {
@@ -136,7 +137,7 @@ func writeJSON(w http.ResponseWriter, status int, contentType string, v any) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(status)
 	// A write error means the client is gone; there's no one left to tell.
-	_, _ = w.Write(body) //nolint:gosec // G705: always a JSON content type with nosniff, never HTML
+	_, _ = w.Write(body)
 }
 
 // recordError attaches err to the request's summary log line (written by logRequests). A request

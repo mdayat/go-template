@@ -92,6 +92,13 @@ linters:
         linters:
           - gosec
           - gochecknoglobals
+      # G705 (cross-site scripting) on writeJSON: replies are always a JSON content type with
+      # nosniff, never HTML. A rule, not a //nolint: G705 only fires while some handler writes
+      # request data into a reply, and an unused //nolint fails the lint.
+      - path: internal/api/problem\.go
+        linters:
+          - gosec
+        text: G705
 
 # Show every issue: by default a second issue on the same line, and issues past a per-linter
 # cap, are hidden.
