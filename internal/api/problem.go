@@ -46,6 +46,17 @@ type fieldProblem struct {
 
 const internalErrorDetail = "internal server error"
 
+// statusError is a failure that only exists in HTTP (an oversized body, a wrong Content-Type), so it
+// isn't an apperr kind. Its detail is safe to show the caller.
+type statusError struct {
+	status int
+	detail string
+}
+
+func (e *statusError) Error() string {
+	return e.detail
+}
+
 func writeError(w http.ResponseWriter, r *http.Request, err error) {
 	recordError(r, err)
 
@@ -61,9 +72,12 @@ func writeError(w http.ResponseWriter, r *http.Request, err error) {
 	writeProblem(w, r, problemFor(err))
 }
 
-// problemFor maps an error to its reply. Only an *apperr.Error's Detail reaches the caller; any other
-// error is a 500 with a fixed message, since its text may hold internal details.
+// problemFor maps an error to its reply. Only a *statusError's or *apperr.Error's detail reaches the
+// caller; any other error is a 500 with a fixed message, since its text may hold internal details.
 func problemFor(err error) problem {
+	if statusErr, ok := errors.AsType[*statusError](err); ok {
+		return newProblem(statusErr.status, statusErr.detail)
+	}
 	appErr, ok := errors.AsType[*apperr.Error](err)
 	if !ok {
 		return newProblem(http.StatusInternalServerError, internalErrorDetail)

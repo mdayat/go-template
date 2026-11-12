@@ -16,7 +16,9 @@ This repository serves as a template for speeding up project scaffolding for Go 
 - **`internal/api`**: Routes, plus one JSON log line per request with a request ID (also sent back as
   `X-Request-Id`). Query strings, headers and bodies are never logged. Handlers return errors;
   `Handle` turns them into [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) replies, and panics
-  become 500 replies with the stack on the request's log line.
+  become 500 replies with the stack on the request's log line. JSON request bodies are read with a
+  1 MB cap, unknown fields rejected, and checked with `validate` struct tags; failures name the
+  JSON field and the rule.
 - **`internal/apperr`**: The kinds of expected failure (bad request, invalid, not found, conflict)
   services return, with a message safe to show callers. Any other error is a 500.
 - **GitHub Workflow**: Pre-configured GitHub Actions workflow for code quality checks.
