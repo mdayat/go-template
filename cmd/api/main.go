@@ -20,7 +20,6 @@ import (
 	"github.com/mdayat/go-template/internal/api"
 	"github.com/mdayat/go-template/internal/config"
 	"github.com/mdayat/go-template/internal/db"
-	"github.com/mdayat/go-template/internal/task"
 )
 
 const (
@@ -62,7 +61,7 @@ func run() error {
 	defer pool.Close()
 
 	server := &http.Server{
-		Handler:           api.NewRouter(log.Logger, task.NewService(db.New(pool))),
+		Handler:           api.NewRouter(log.Logger, api.NewServices(db.New(pool))),
 		ErrorLog:          api.ServerErrorLog(log.Logger),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,

@@ -15,8 +15,6 @@ import (
 	"github.com/mdayat/go-template/internal/task"
 )
 
-const defaultPageSize = 20
-
 // taskRoutes serves /tasks. Request shape (a field is present) is checked by validate tags; the
 // rules about what a valid task is live in the task service.
 type taskRoutes struct {

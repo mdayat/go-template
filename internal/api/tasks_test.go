@@ -1,11 +1,8 @@
 package api
 
 import (
-	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"slices"
 	"strings"
@@ -17,34 +14,10 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/rs/zerolog"
 
 	"github.com/mdayat/go-template/internal/db"
 	"github.com/mdayat/go-template/internal/task"
-	"github.com/mdayat/go-template/internal/testdb"
 )
-
-// seedTime is when seeded tasks were made: in the past, so a change made by a test moves updated_at.
-var seedTime = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-
-// tasksAPI returns the real router and service on a database of the test's own.
-func tasksAPI(t *testing.T) (http.Handler, *pgxpool.Pool) {
-	t.Helper()
-	pool := testdb.New(t)
-	return NewRouter(zerolog.Nop(), task.NewService(db.New(pool))), pool
-}
-
-// send makes a request; a non-empty body is sent as JSON.
-func send(t *testing.T, router http.Handler, method, target, body string) *httptest.ResponseRecorder {
-	t.Helper()
-	req := httptest.NewRequestWithContext(t.Context(), method, target, strings.NewReader(body))
-	if body != "" {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, req)
-	return rec
-}
 
 // seedTask inserts a task straight into the database, made createdAfter seedTime.
 func seedTask(t *testing.T, pool *pgxpool.Pool, title string, createdAfter time.Duration) db.Task {
@@ -80,28 +53,6 @@ func asReply(row db.Task) taskResponse {
 	return taskResponse{ID: row.ID, Title: row.Title, Done: row.Done, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt}
 }
 
-func decodeReply(t *testing.T, rec *httptest.ResponseRecorder, reply any) {
-	t.Helper()
-	if err := json.Unmarshal(rec.Body.Bytes(), reply); err != nil {
-		t.Fatalf("reply is not JSON: %q: %v", rec.Body, err)
-	}
-}
-
-// problemReply is the part of an error reply a test checks: the status and the problem's fields.
-type problemReply struct {
-	Status int
-	Detail string
-	Errors []fieldProblem
-}
-
-// readProblem returns rec's status and problem body, for the test to compare.
-func readProblem(t *testing.T, rec *httptest.ResponseRecorder) problemReply {
-	t.Helper()
-	var p problem
-	decodeReply(t, rec, &p)
-	return problemReply{Status: rec.Code, Detail: p.Detail, Errors: p.Errors}
-}
-
 func TestCreateTask(t *testing.T) {
 	t.Parallel()
 
@@ -117,7 +68,7 @@ func TestCreateTask(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			router, pool := tasksAPI(t)
+			router, pool := testAPI(t)
 
 			rec := send(t, router, http.MethodPost, "/tasks", fmt.Sprintf(`{"title":%q}`, tt.title))
 
@@ -172,7 +123,7 @@ func TestCreateTaskRejects(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			router, pool := tasksAPI(t)
+			router, pool := testAPI(t)
 			existing := seedTask(t, pool, "taken", 0)
 
 			rec := send(t, router, http.MethodPost, "/tasks", tt.body)
@@ -191,7 +142,7 @@ func TestCreateTaskRejects(t *testing.T) {
 // The unique constraint, not a check-then-insert, decides between requests racing for one title.
 func TestCreateTaskSameTitleAtOnce(t *testing.T) {
 	t.Parallel()
-	router, pool := tasksAPI(t)
+	router, pool := testAPI(t)
 
 	const requests = 10
 	codes := make(chan int, requests)
@@ -218,7 +169,7 @@ func TestCreateTaskSameTitleAtOnce(t *testing.T) {
 
 func TestGetTask(t *testing.T) {
 	t.Parallel()
-	router, pool := tasksAPI(t)
+	router, pool := testAPI(t)
 	want := seedTask(t, pool, "write docs", 0)
 	seedTask(t, pool, "another", time.Minute)
 
@@ -236,7 +187,7 @@ func TestGetTask(t *testing.T) {
 
 func TestGetTaskNotFound(t *testing.T) {
 	t.Parallel()
-	router, pool := tasksAPI(t)
+	router, pool := testAPI(t)
 	seedTask(t, pool, "write docs", 0)
 
 	for _, id := range []string{uuid.NewString(), "42"} {
@@ -250,7 +201,7 @@ func TestGetTaskNotFound(t *testing.T) {
 
 func TestListTasksIsEmptyWithoutTasks(t *testing.T) {
 	t.Parallel()
-	router, _ := tasksAPI(t)
+	router, _ := testAPI(t)
 
 	rec := send(t, router, http.MethodGet, "/tasks", "")
 
@@ -261,7 +212,7 @@ func TestListTasksIsEmptyWithoutTasks(t *testing.T) {
 
 func TestListTasksDefaultPageSize(t *testing.T) {
 	t.Parallel()
-	router, pool := tasksAPI(t)
+	router, pool := testAPI(t)
 	for i := range defaultPageSize + 1 {
 		seedTask(t, pool, fmt.Sprintf("task %02d", i), time.Duration(i)*time.Minute)
 	}
@@ -277,7 +228,7 @@ func TestListTasksDefaultPageSize(t *testing.T) {
 // Paging walks every task exactly once, newest first, even when tasks share a created_at.
 func TestListTasksPagesThroughEveryTask(t *testing.T) {
 	t.Parallel()
-	router, pool := tasksAPI(t)
+	router, pool := testAPI(t)
 	oldest := seedTask(t, pool, "oldest", 0)
 	tiedA := seedTask(t, pool, "tied a", time.Minute)
 	tiedB := seedTask(t, pool, "tied b", time.Minute)
@@ -338,7 +289,7 @@ func TestListTasksRejects(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			router, _ := tasksAPI(t)
+			router, _ := testAPI(t)
 			rec := send(t, router, http.MethodGet, "/tasks?"+tt.query, "")
 			want := problemReply{Status: tt.wantStatus, Detail: tt.wantDetail, Errors: tt.wantErrors}
 			if diff := cmp.Diff(want, readProblem(t, rec)); diff != "" {
@@ -346,11 +297,6 @@ func TestListTasksRejects(t *testing.T) {
 			}
 		})
 	}
-}
-
-// cursorOf encodes raw the way real cursors are encoded, so only its content is wrong.
-func cursorOf(raw string) string {
-	return base64.RawURLEncoding.EncodeToString([]byte(raw))
 }
 
 func TestUpdateTask(t *testing.T) {
@@ -373,7 +319,7 @@ func TestUpdateTask(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			router, pool := tasksAPI(t)
+			router, pool := testAPI(t)
 			before := seedTask(t, pool, "write docs", 0)
 			other := seedTask(t, pool, "other", time.Minute)
 
@@ -429,7 +375,7 @@ func TestUpdateTaskRejects(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			router, pool := tasksAPI(t)
+			router, pool := testAPI(t)
 			seeded := seedTask(t, pool, "write docs", 0)
 			other := seedTask(t, pool, "other", time.Minute)
 			id := tt.id
@@ -452,7 +398,7 @@ func TestUpdateTaskRejects(t *testing.T) {
 
 func TestDeleteTask(t *testing.T) {
 	t.Parallel()
-	router, pool := tasksAPI(t)
+	router, pool := testAPI(t)
 	doomed := seedTask(t, pool, "write docs", 0)
 	kept := seedTask(t, pool, "other", time.Minute)
 
@@ -468,7 +414,7 @@ func TestDeleteTask(t *testing.T) {
 
 func TestDeleteTaskNotFound(t *testing.T) {
 	t.Parallel()
-	router, pool := tasksAPI(t)
+	router, pool := testAPI(t)
 	kept := seedTask(t, pool, "write docs", 0)
 
 	for _, id := range []string{uuid.NewString(), "42"} {
@@ -486,7 +432,7 @@ func TestDeleteTaskNotFound(t *testing.T) {
 // A database failure is a 500 that tells the caller nothing about the database.
 func TestTasksDatabaseDownIs500(t *testing.T) {
 	t.Parallel()
-	router, pool := tasksAPI(t)
+	router, pool := testAPI(t)
 	pool.Close()
 
 	rec := send(t, router, http.MethodGet, "/tasks", "")

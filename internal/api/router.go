@@ -11,6 +11,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/hlog"
 
+	"github.com/mdayat/go-template/internal/db"
 	"github.com/mdayat/go-template/internal/task"
 )
 
@@ -22,12 +23,32 @@ const (
 	// lock runs on and holds its database connection. Kept below WriteTimeout (10 s) so the 503
 	// reply still reaches the client.
 	requestTimeout = 8 * time.Second
+
+	// defaultPageSize is a list's page size when the request has no ?limit=.
+	defaultPageSize = 20
 )
 
+// Services holds what the routes call, one field per feature. A new feature adds its field here and
+// builds it in NewServices.
+type Services struct {
+	Tasks *task.Service
+}
+
+// NewServices builds every feature's service on queries. The app (cmd/api) and the endpoint tests
+// (testAPI) both get their services here, so a feature can't be wired into one and forgotten in the
+// other: its tests would pass while the app served it with a nil service.
+func NewServices(queries *db.Queries) Services {
+	return Services{
+		Tasks: task.NewService(queries),
+	}
+}
+
 // NewRouter returns the API's routes, each request logged to logger.
-func NewRouter(logger zerolog.Logger, tasks *task.Service) *chi.Mux {
+func NewRouter(logger zerolog.Logger, services Services) *chi.Mux {
 	router := newBaseRouter(logger)
-	taskRoutes{tasks: tasks, decoder: newBodyDecoder()}.mount(router)
+	// One decoder for every feature: the validator caches what it learns about each type.
+	decoder := newBodyDecoder()
+	taskRoutes{tasks: services.Tasks, decoder: decoder}.mount(router)
 	return router
 }
 

@@ -15,7 +15,9 @@ Run `make fmt lint test check-generated`. All four must pass; don't silence a li
 |---|---|---|
 | business rules, mapping database errors | `internal/<feature>/` service | `internal/task/service.go` |
 | routes and handlers | `internal/api/<feature>.go`, mounted in `router.go` | `internal/api/tasks.go` |
+| wiring a new service | a field in `api.Services` and a line in `api.NewServices` (`router.go`); the app and the tests both build services there | `Tasks` |
 | endpoint tests | `internal/api/<feature>_test.go` | `internal/api/tasks_test.go` |
+| anything several features use | not in one feature's files (removing that feature would break the rest): test helpers in `internal/api/main_test.go`, other code in a shared file such as `router.go` | `send`, `readProblem`, `defaultPageSize` |
 | schema | `db/schema.sql`, then `make migrate-diff name=<what>` | `db/migrations/` |
 | queries | `db/queries/<feature>.sql`, then `make generate` | `db/queries/tasks.sql` |
 | settings | `internal/config/config.go` and `.example.env` | `DATABASE_URL` |
@@ -52,7 +54,8 @@ Never edit `internal/db/` (generated) or a migration that's already merged (writ
 - Retry a transaction only on 40001 and 40P01, and never do outside calls inside it.
 
 **Tests** ([testing.md](docs/standards/testing.md))
-- Endpoint tests through `NewRouter` on `testdb.New(t)`; check the reply **and** the rows.
+- Endpoint tests use `testAPI(t)` (the real router and services on a database of the test's own);
+  check the reply **and** the rows. Don't build a router per feature.
 - Don't mock our own code. Seed rows with SQL, not through the endpoint under test.
 - `t.Parallel()`, table tests, `cmp.Diff(want, got)`. Don't assert on library error text.
 - Break the code a test guards and confirm the test fails (the broken code must compile).

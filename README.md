@@ -87,9 +87,8 @@ sqlc needs at least one query, so do it in one go with your first table:
 
 2. In `db/schema.sql`, replace the `tasks` table and index with your own table; put its queries in
    `db/queries/<feature>.sql`.
-3. In `internal/api/router.go`, remove the `tasks` parameter and the `taskRoutes{...}.mount(router)`
-   line (mount your own routes instead); in `cmd/api/main.go`, change the `api.NewRouter(...)` call
-   to match.
+3. In `internal/api/router.go`, replace tasks with your own feature: the `Tasks` field of
+   `api.Services`, its line in `NewServices`, and the `taskRoutes{...}.mount(router)` line.
 4. Regenerate and check:
 
    ```sh
@@ -97,6 +96,9 @@ sqlc needs at least one query, so do it in one go with your first table:
    make generate
    make fmt lint test check-generated
    ```
+
+   `make lint` then reports any shared helper no feature uses any more as `unused` (for example
+   `cursorOf` and `defaultPageSize` if nothing has a paged list yet): delete those, and run it again.
 
 ## Deploying
 

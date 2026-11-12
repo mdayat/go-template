@@ -6,8 +6,9 @@ coverage number: covered lines can still be wrong, and a test that can't fail pr
 ## What to test, and how
 
 - **Through the real entry point, against a real database.** An endpoint test sends a request to
-  the real router (`NewRouter`) with the real service on a real Postgres, then checks two things:
-  **the reply and the rows**. Example: `internal/api/tasks_test.go`.
+  the real router with the real services on a real Postgres (`testAPI` in
+  `internal/api/main_test.go` builds them), then checks two things: **the reply and the rows**.
+  Example: `internal/api/tasks_test.go`.
 - **Don't mock our own code.** A mock of our own service tests the mock. Fake only what we can't
   run locally: a payment provider, an email service, another company's API.
 - **Every success and every error path** a caller can reach: each status code an endpoint can
@@ -43,6 +44,9 @@ creates the rows it needs.
   subtests, the message names the input, and the loop uses `t.Error` so every input is checked.
 - `t.Fatal` when the rest of the test can't run (no reply to decode); `t.Error` otherwise, so one
   run shows every problem.
+- Helpers every feature's tests use (`testAPI`, `send`, `readProblem`, `seedTime`) live in
+  `internal/api/main_test.go`, not in one feature's test file, so removing a feature can't break
+  the others.
 - The test decides pass or fail. Helpers build things and fetch results (`seedTask`, `tasksInDB`,
   `readProblem`) and stop the test only when that setup itself fails; the test compares the result
   with `cmp.Diff` and reports, so each case decides its own message and whether to stop.
