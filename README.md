@@ -1,12 +1,13 @@
 # Go Template Repository
 
-This repository serves as a template for speeding up project scaffolding for Go projects. It includes a Dockerfile, revive configuration, Makefile, example environment variables, zerolog setup, an `env` package, and a GitHub workflow for code quality checks.
+This repository serves as a template for speeding up project scaffolding for Go projects. It includes a Dockerfile, golangci-lint configuration, Makefile, example environment variables, zerolog setup, an `env` package, and a GitHub workflow for code quality checks.
 
 ## Features
 
 - **Dockerfile**: Pre-configured Dockerfile for containerizing your Go application.
-- **revive.toml**: Configuration file for `revive`, a fast Go linter.
-- **Makefile**: Automate various tasks such as building and running the application.
+- **.golangci.yml**: Configuration for `golangci-lint`, which runs `revive`, `staticcheck` and other linters.
+- **tools/go.mod**: Pins `golangci-lint`, `sqlc` and `govulncheck`, run with `go tool -modfile=tools/go.mod`.
+- **Makefile**: `fmt`, `lint`, `test`, `vuln`, `build` and `run`, all on the Go version in `go.mod`.
 - **.example.env**: Example environment file to manage application settings.
 - **zerolog**: A fast and structured logger for Go.
 - **`env` package**: For managing environment variables.
@@ -16,9 +17,8 @@ This repository serves as a template for speeding up project scaffolding for Go 
 
 ### Prerequisites
 
-- Go
+- Go 1.21 or newer (`make` downloads the exact version in `go.mod`)
 - Docker
-- [revive](https://github.com/mgechev/revive)
 
 ### Installation
 

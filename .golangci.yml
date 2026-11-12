@@ -1,0 +1,105 @@
+version: "2"
+
+linters:
+  # errcheck, govet, ineffassign, staticcheck, unused
+  default: standard
+  enable:
+    # style and naming
+    - revive
+    - gocritic
+    - misspell
+    - modernize
+    - unconvert
+    - usestdlibvars
+    - wastedassign
+    - copyloopvar
+    # design rules
+    - ireturn # return concrete types, not our own interfaces (stdlib ones like error are allowed)
+    - nakedret # no blank returns in functions that return values
+    - nonamedreturns # named results only when a deferred func changes the error
+    - gochecknoinits # avoid init()
+    - gochecknoglobals # no mutable package-level variables
+    - forcetypeassert # type assertions use the comma-ok form
+    - containedctx # never store a context.Context in a struct
+    - exhaustive # switches over enums handle every value
+    # errors
+    - errorlint
+    - errname
+    - nilerr
+    - nilnesserr
+    # HTTP, database, logging
+    - bodyclose
+    - noctx
+    - rowserrcheck
+    - sqlclosecheck
+    - zerologlint # zerolog events that are never sent
+    - musttag
+    # security
+    - gosec
+    # tests
+    - usetesting
+    - thelper
+    - tparallel
+    # keeps //nolint honest
+    - nolintlint
+
+  settings:
+    revive:
+      rules:
+        - name: blank-imports
+        - name: context-as-argument
+        - name: context-keys-type
+        - name: dot-imports
+        - name: error-return
+        - name: error-strings
+        - name: error-naming
+        - name: exported
+        - name: increment-decrement
+        - name: var-naming
+        - name: var-declaration
+        - name: package-comments
+        - name: range
+        - name: receiver-naming
+        - name: time-naming
+        - name: unexported-return
+        - name: indent-error-flow
+        - name: errorf
+        - name: empty-block
+        - name: superfluous-else
+        - name: unused-parameter
+        - name: unreachable-code
+        - name: redefines-builtin-id
+    nakedret:
+      max-func-lines: 0
+    exhaustive:
+      default-signifies-exhaustive: true
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+
+  exclusions:
+    generated: strict
+    presets:
+      - std-error-handling
+      - common-false-positives
+    rules:
+      - path: _test\.go
+        linters:
+          - gosec
+          - gochecknoglobals
+
+# Show every issue: by default a second issue on the same line, and issues past a per-linter
+# cap, are hidden.
+issues:
+  uniq-by-line: false
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+formatters:
+  enable:
+    - gofumpt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/mdayat/go-template

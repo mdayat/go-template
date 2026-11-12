@@ -9,37 +9,31 @@ on:
       - main
 
 jobs:
-  build:
+  check:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+        uses: actions/checkout@v7
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version-file: "go.mod"
+          cache-dependency-path: |
+            go.sum
+            tools/go.sum
 
       - name: Verify dependencies
-        run: go mod verify
+        run: |
+          go mod verify
+          go mod verify -modfile=tools/go.mod
 
-      - name: Install staticcheck
-        run: go install honnef.co/go/tools/cmd/staticcheck@latest
+      - name: Lint
+        run: make lint
 
-      - name: Run staticcheck
-        run: staticcheck ./...
+      - name: Check for known vulnerabilities
+        run: make vuln
 
-      - name: Run govulncheck
-        uses: golang/govulncheck-action@v1
-        with:
-          go-version-file: "go.mod"
-          go-package: ./...
-
-      - name: Run revive
-        uses: morphy2k/revive-action@v2
-        with:
-          config: revive.toml
-          fail-on-any: true
+      - name: Test
+        run: make test

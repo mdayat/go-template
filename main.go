@@ -1,12 +1,14 @@
+// Command go-template starts the application.
 package main
 
 import (
 	"path/filepath"
 	"strconv"
 
-	"github.com/mdayat/go-template/configs/env"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
+
+	"github.com/mdayat/go-template/configs/env"
 )
 
 func main() {
@@ -16,7 +18,7 @@ func main() {
 	}
 
 	logger := log.With().Caller().Logger()
-	if err := env.Load(); err != nil {
+	if _, err := env.Load(); err != nil {
 		logger.Fatal().Err(err).Send()
 	}
 }

@@ -1,21 +1,23 @@
+// Package env loads the application's settings from environment variables.
 package env
 
 import (
+	"fmt"
 	"os"
 
 	"github.com/joho/godotenv"
 )
 
-var (
+// Env holds the settings read from environment variables.
+type Env struct {
 	DatabaseURL string
-)
+}
 
-func Load() error {
+// Load reads the .env file into the environment and returns the settings.
+func Load() (Env, error) {
 	if err := godotenv.Load(); err != nil {
-		return err
+		return Env{}, fmt.Errorf("load .env: %w", err)
 	}
 
-	DatabaseURL = os.Getenv("DATABASE_URL")
-
-	return nil
+	return Env{DatabaseURL: os.Getenv("DATABASE_URL")}, nil
 }
