@@ -39,11 +39,17 @@ creates the rows it needs.
 - Compare with `cmp.Diff(want, got)` from [go-cmp](https://github.com/google/go-cmp), and print
   `(-want +got)`. No assertion libraries.
 - Failure messages say what was called, what came back and what was expected:
-  `t.Errorf("status = %d, want 201; body %s", rec.Code, rec.Body)`.
+  `t.Errorf("POST /tasks status = %d, want 201; body %s", rec.Code, rec.Body)`. In a loop without
+  subtests, the message names the input, and the loop uses `t.Error` so every input is checked.
 - `t.Fatal` when the rest of the test can't run (no reply to decode); `t.Error` otherwise, so one
   run shows every problem.
+- The test decides pass or fail. Helpers build things and fetch results (`seedTask`, `tasksInDB`,
+  `readProblem`) and stop the test only when that setup itself fails; the test compares the result
+  with `cmp.Diff` and reports, so each case decides its own message and whether to stop.
 - Helpers call `t.Helper()` and take `t` first. Tests use `t.Context()`, not
   `context.Background()`. — lint (thelper, usetesting, tparallel)
+- Test names are `Test` + what's tested, without underscores, also for unexported functions
+  (`TestLocalURLRefusesOtherHosts`).
 - Don't assert on text that comes from a library (Go's JSON errors, driver messages): it changes
   between versions. Our own messages, status codes and field codes are fine to assert.
 

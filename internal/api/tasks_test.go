@@ -87,27 +87,19 @@ func decodeReply(t *testing.T, rec *httptest.ResponseRecorder, reply any) {
 	}
 }
 
-// checkProblem checks an error reply's status, detail and field errors.
-func checkProblem(t *testing.T, rec *httptest.ResponseRecorder, wantStatus int, wantDetail string, wantErrors []fieldProblem) {
-	t.Helper()
-	if rec.Code != wantStatus {
-		t.Fatalf("status = %d, want %d; body %s", rec.Code, wantStatus, rec.Body)
-	}
-	var got problem
-	decodeReply(t, rec, &got)
-	if got.Detail != wantDetail {
-		t.Errorf("detail = %q, want %q", got.Detail, wantDetail)
-	}
-	if diff := cmp.Diff(wantErrors, got.Errors); diff != "" {
-		t.Errorf("field errors mismatch (-want +got):\n%s", diff)
-	}
+// problemReply is the part of an error reply a test checks: the status and the problem's fields.
+type problemReply struct {
+	Status int
+	Detail string
+	Errors []fieldProblem
 }
 
-func checkDB(t *testing.T, pool *pgxpool.Pool, want []db.Task) {
+// readProblem returns rec's status and problem body, for the test to compare.
+func readProblem(t *testing.T, rec *httptest.ResponseRecorder) problemReply {
 	t.Helper()
-	if diff := cmp.Diff(want, tasksInDB(t, pool)); diff != "" {
-		t.Errorf("tasks in database mismatch (-want +got):\n%s", diff)
-	}
+	var p problem
+	decodeReply(t, rec, &p)
+	return problemReply{Status: rec.Code, Detail: p.Detail, Errors: p.Errors}
 }
 
 func TestCreateTask(t *testing.T) {
@@ -130,7 +122,7 @@ func TestCreateTask(t *testing.T) {
 			rec := send(t, router, http.MethodPost, "/tasks", fmt.Sprintf(`{"title":%q}`, tt.title))
 
 			if rec.Code != http.StatusCreated {
-				t.Fatalf("status = %d, want 201; body %s", rec.Code, rec.Body)
+				t.Fatalf("POST /tasks status = %d, want 201; body %s", rec.Code, rec.Body)
 			}
 			var got taskResponse
 			decodeReply(t, rec, &got)
@@ -157,6 +149,7 @@ func TestCreateTask(t *testing.T) {
 func TestCreateTaskRejects(t *testing.T) {
 	t.Parallel()
 	requiredTitle := []fieldProblem{{Field: "title", Rule: "required", Message: "is required"}}
+	noNUL := []fieldProblem{{Field: "title", Rule: "no_nul", Message: "must not contain the NUL character"}}
 
 	tests := []struct {
 		name       string
@@ -171,6 +164,7 @@ func TestCreateTaskRejects(t *testing.T) {
 			"title too long", fmt.Sprintf(`{"title":%q}`, strings.Repeat("é", task.MaxTitleLength+1)), 422, "the title is invalid",
 			[]fieldProblem{{Field: "title", Rule: "max", Message: "must be at most 200 characters long"}},
 		},
+		{"title with a NUL character", `{"title":"a\u0000b"}`, 422, "the title is invalid", noNUL},
 		{"title taken", `{"title":"taken"}`, 409, "a task with this title already exists", nil},
 		{"title taken once trimmed", `{"title":" taken "}`, 409, "a task with this title already exists", nil},
 		{"form body, not JSON", `title=x`, 400, "request body must be a JSON object", nil},
@@ -183,8 +177,13 @@ func TestCreateTaskRejects(t *testing.T) {
 
 			rec := send(t, router, http.MethodPost, "/tasks", tt.body)
 
-			checkProblem(t, rec, tt.wantStatus, tt.wantDetail, tt.wantErrors)
-			checkDB(t, pool, []db.Task{existing})
+			want := problemReply{Status: tt.wantStatus, Detail: tt.wantDetail, Errors: tt.wantErrors}
+			if diff := cmp.Diff(want, readProblem(t, rec)); diff != "" {
+				t.Errorf("POST /tasks reply mismatch (-want +got):\n%s", diff)
+			}
+			if diff := cmp.Diff([]db.Task{existing}, tasksInDB(t, pool)); diff != "" {
+				t.Errorf("tasks in database after POST /tasks mismatch (-want +got):\n%s", diff)
+			}
 		})
 	}
 }
@@ -226,12 +225,12 @@ func TestGetTask(t *testing.T) {
 	rec := send(t, router, http.MethodGet, "/tasks/"+want.ID.String(), "")
 
 	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200; body %s", rec.Code, rec.Body)
+		t.Fatalf("GET /tasks/{id} status = %d, want 200; body %s", rec.Code, rec.Body)
 	}
 	var got taskResponse
 	decodeReply(t, rec, &got)
 	if diff := cmp.Diff(asReply(want), got); diff != "" {
-		t.Errorf("reply mismatch (-want +got):\n%s", diff)
+		t.Errorf("GET /tasks/{id} reply mismatch (-want +got):\n%s", diff)
 	}
 }
 
@@ -242,7 +241,10 @@ func TestGetTaskNotFound(t *testing.T) {
 
 	for _, id := range []string{uuid.NewString(), "42"} {
 		rec := send(t, router, http.MethodGet, "/tasks/"+id, "")
-		checkProblem(t, rec, 404, "task not found", nil)
+		want := problemReply{Status: http.StatusNotFound, Detail: "task not found"}
+		if diff := cmp.Diff(want, readProblem(t, rec)); diff != "" {
+			t.Errorf("GET /tasks/%s reply mismatch (-want +got):\n%s", id, diff)
+		}
 	}
 }
 
@@ -253,7 +255,7 @@ func TestListTasksIsEmptyWithoutTasks(t *testing.T) {
 	rec := send(t, router, http.MethodGet, "/tasks", "")
 
 	if rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != `{"tasks":[]}` {
-		t.Errorf("reply = %d %s, want 200 {\"tasks\":[]}", rec.Code, rec.Body)
+		t.Errorf("GET /tasks = %d %s, want 200 {\"tasks\":[]}", rec.Code, rec.Body)
 	}
 }
 
@@ -268,7 +270,7 @@ func TestListTasksDefaultPageSize(t *testing.T) {
 	decodeReply(t, send(t, router, http.MethodGet, "/tasks", ""), &got)
 
 	if len(got.Tasks) != defaultPageSize || got.NextCursor == "" {
-		t.Errorf("page = %d tasks, next cursor %q; want %d and a cursor", len(got.Tasks), got.NextCursor, defaultPageSize)
+		t.Errorf("GET /tasks = %d tasks, next cursor %q; want %d and a cursor", len(got.Tasks), got.NextCursor, defaultPageSize)
 	}
 }
 
@@ -338,7 +340,10 @@ func TestListTasksRejects(t *testing.T) {
 			t.Parallel()
 			router, _ := tasksAPI(t)
 			rec := send(t, router, http.MethodGet, "/tasks?"+tt.query, "")
-			checkProblem(t, rec, tt.wantStatus, tt.wantDetail, tt.wantErrors)
+			want := problemReply{Status: tt.wantStatus, Detail: tt.wantDetail, Errors: tt.wantErrors}
+			if diff := cmp.Diff(want, readProblem(t, rec)); diff != "" {
+				t.Errorf("GET /tasks?%s reply mismatch (-want +got):\n%s", tt.query, diff)
+			}
 		})
 	}
 }
@@ -375,7 +380,7 @@ func TestUpdateTask(t *testing.T) {
 			rec := send(t, router, http.MethodPatch, "/tasks/"+before.ID.String(), tt.body)
 
 			if rec.Code != http.StatusOK {
-				t.Fatalf("status = %d, want 200; body %s", rec.Code, rec.Body)
+				t.Fatalf("PATCH /tasks/{id} status = %d, want 200; body %s", rec.Code, rec.Body)
 			}
 			var got taskResponse
 			decodeReply(t, rec, &got)
@@ -386,7 +391,9 @@ func TestUpdateTask(t *testing.T) {
 				t.Errorf("updated_at = %s (was %s), want unchanged = %v", got.UpdatedAt, before.UpdatedAt, tt.wantUnchanged)
 			}
 			after := db.Task{ID: got.ID, Title: got.Title, Done: got.Done, CreatedAt: got.CreatedAt, UpdatedAt: got.UpdatedAt}
-			checkDB(t, pool, sortedByTitle(after, other))
+			if diff := cmp.Diff(sortedByTitle(after, other), tasksInDB(t, pool)); diff != "" {
+				t.Errorf("tasks in database after PATCH mismatch (-want +got):\n%s", diff)
+			}
 		})
 	}
 }
@@ -412,6 +419,10 @@ func TestUpdateTaskRejects(t *testing.T) {
 			"the title is invalid",
 			[]fieldProblem{{Field: "title", Rule: "max", Message: "must be at most 200 characters long"}},
 		},
+		{
+			"title with a NUL character", "", `{"title":"a\u0000b"}`, 422, "the title is invalid",
+			[]fieldProblem{{Field: "title", Rule: "no_nul", Message: "must not contain the NUL character"}},
+		},
 		{"title of another task", "", `{"title":"other"}`, 409, "a task with this title already exists", nil},
 		{"unknown field", "", `{"colour":"red"}`, 400, `unknown field "colour"`, nil},
 	}
@@ -428,8 +439,13 @@ func TestUpdateTaskRejects(t *testing.T) {
 
 			rec := send(t, router, http.MethodPatch, "/tasks/"+id, tt.body)
 
-			checkProblem(t, rec, tt.wantStatus, tt.wantDetail, tt.wantErrors)
-			checkDB(t, pool, sortedByTitle(seeded, other))
+			want := problemReply{Status: tt.wantStatus, Detail: tt.wantDetail, Errors: tt.wantErrors}
+			if diff := cmp.Diff(want, readProblem(t, rec)); diff != "" {
+				t.Errorf("PATCH /tasks/%s reply mismatch (-want +got):\n%s", id, diff)
+			}
+			if diff := cmp.Diff(sortedByTitle(seeded, other), tasksInDB(t, pool)); diff != "" {
+				t.Errorf("tasks in database after PATCH mismatch (-want +got):\n%s", diff)
+			}
 		})
 	}
 }
@@ -443,9 +459,11 @@ func TestDeleteTask(t *testing.T) {
 	rec := send(t, router, http.MethodDelete, "/tasks/"+doomed.ID.String(), "")
 
 	if rec.Code != http.StatusNoContent || rec.Body.Len() != 0 {
-		t.Errorf("reply = %d %q, want 204 with no body", rec.Code, rec.Body)
+		t.Errorf("DELETE /tasks/{id} = %d %q, want 204 with no body", rec.Code, rec.Body)
 	}
-	checkDB(t, pool, []db.Task{kept})
+	if diff := cmp.Diff([]db.Task{kept}, tasksInDB(t, pool)); diff != "" {
+		t.Errorf("tasks in database after DELETE mismatch (-want +got):\n%s", diff)
+	}
 }
 
 func TestDeleteTaskNotFound(t *testing.T) {
@@ -455,9 +473,14 @@ func TestDeleteTaskNotFound(t *testing.T) {
 
 	for _, id := range []string{uuid.NewString(), "42"} {
 		rec := send(t, router, http.MethodDelete, "/tasks/"+id, "")
-		checkProblem(t, rec, 404, "task not found", nil)
+		want := problemReply{Status: http.StatusNotFound, Detail: "task not found"}
+		if diff := cmp.Diff(want, readProblem(t, rec)); diff != "" {
+			t.Errorf("DELETE /tasks/%s reply mismatch (-want +got):\n%s", id, diff)
+		}
 	}
-	checkDB(t, pool, []db.Task{kept})
+	if diff := cmp.Diff([]db.Task{kept}, tasksInDB(t, pool)); diff != "" {
+		t.Errorf("tasks in database after DELETE mismatch (-want +got):\n%s", diff)
+	}
 }
 
 // A database failure is a 500 that tells the caller nothing about the database.
@@ -468,7 +491,10 @@ func TestTasksDatabaseDownIs500(t *testing.T) {
 
 	rec := send(t, router, http.MethodGet, "/tasks", "")
 
-	checkProblem(t, rec, 500, internalErrorDetail, nil)
+	want := problemReply{Status: http.StatusInternalServerError, Detail: internalErrorDetail}
+	if diff := cmp.Diff(want, readProblem(t, rec)); diff != "" {
+		t.Errorf("GET /tasks reply mismatch (-want +got):\n%s", diff)
+	}
 }
 
 func sortedByTitle(a, b db.Task) []db.Task {

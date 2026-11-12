@@ -8,6 +8,7 @@
 package testdb
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"errors"
@@ -77,14 +78,16 @@ func New(tb testing.TB) *pgxpool.Pool {
 			return
 		}
 		// tb.Context() is already cancelled when cleanups run.
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(tb.Context()), 10*time.Second)
 		defer cancel()
 		if _, err := srv.admin.Exec(ctx, "DROP DATABASE "+ident(name)); err != nil {
 			tb.Errorf("testdb: drop database %s: %v", name, err)
 		}
 	})
 
-	pool, err := pgxpool.New(tb.Context(), srv.urlFor(name))
+	// Assigns the pool declared above, which the cleanup closes.
+	var err error
+	pool, err = pgxpool.New(tb.Context(), srv.urlFor(name))
 	if err != nil {
 		tb.Fatalf("testdb: connect to %s: %v", name, err)
 	}
@@ -127,7 +130,7 @@ func newServer() (*server, error) {
 	}
 	if err := admin.Ping(ctx); err != nil {
 		admin.Close()
-		return nil, fmt.Errorf("connect to %s (is it running? `make db-up`): %w", base.Host, err)
+		return nil, fmt.Errorf("connect to Postgres (is it running? `make db-up`): %w", err)
 	}
 
 	srv := &server{admin: admin, base: base, master: namePrefix + "master_" + randomSuffix()}
@@ -152,7 +155,7 @@ func migrate(ctx context.Context, root, dbURL string) error {
 		return errors.New("atlas is not installed or not on PATH (brew install atlas)")
 	}
 	if err != nil {
-		return fmt.Errorf("apply migrations: %w\n%s", err, out)
+		return fmt.Errorf("apply migrations: %s: %w", bytes.TrimSpace(out), err)
 	}
 	return nil
 }
@@ -179,6 +182,11 @@ func localURL(raw string) (*url.URL, error) {
 	u, err := url.Parse(raw)
 	if err != nil || (u.Scheme != "postgres" && u.Scheme != "postgresql") {
 		return nil, fmt.Errorf("%s must be a postgres:// URL", envURL)
+	}
+	// Each test's copy is reached by swapping the URL's path; a dbname parameter would win over the
+	// path and send every test to that one database.
+	if u.Query().Has("dbname") {
+		return nil, fmt.Errorf("%s: put the database in the path, not in ?dbname=", envURL)
 	}
 	cfg, err := pgconn.ParseConfig(raw)
 	if err != nil {

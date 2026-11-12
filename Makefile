@@ -8,9 +8,13 @@ export GOTOOLCHAIN := go$(shell sed -n 's/^go //p' go.mod)
 TOOL := go tool -modfile=tools/go.mod
 
 # migrate-apply uses DATABASE_URL from the environment, else from .env, the same order the app uses.
-# (Not `include .env`: a value from an included file would beat the environment.) Reads the forms
-# the app's .env loader accepts: KEY=value, KEY="value", KEY='value', export KEY=value.
-export DATABASE_URL ?= $(shell sed -nE "s/^(export[[:space:]]+)?DATABASE_URL=[\"']?([^\"']*)[\"']?[[:space:]]*$$/\2/p" .env 2>/dev/null | tail -n 1)
+# (Not `include .env`: a value from an included file would beat the environment.) Reads the value
+# the way the app's .env loader does: KEY=value, KEY="value", KEY='value', export KEY=value, and
+# for unquoted values a trailing " # comment" and spaces are dropped. (HASH: a bare # in a Makefile
+# starts a comment.)
+HASH := \#
+export DATABASE_URL ?= $(shell sed -nE 's/^(export[[:space:]]+)?DATABASE_URL=//p' .env 2>/dev/null | tail -n 1 \
+	| sed -E -e "s/^\"([^\"]*)\".*/\1/;t" -e "s/^'([^']*)'.*/\1/;t" -e "s/[[:space:]]+$(HASH).*//" -e "s/[[:space:]]+$$//")
 
 .PHONY: fmt lint test test-db-clean vuln build rename image run db-up db-down generate check-generated \
 	migrate-diff migrate-apply

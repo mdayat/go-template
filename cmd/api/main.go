@@ -96,7 +96,10 @@ func run() error {
 
 	// The server stops first so no request is cut off mid-query; the deferred pool.Close runs after.
 	if err := server.Shutdown(shutdownCtx); err != nil {
-		return fmt.Errorf("shut down http server: %w", err)
+		// Requests still running: closing their connections cancels their contexts, which stops
+		// their queries and returns their connections. Otherwise the deferred pool.Close waits for
+		// them forever and the process never exits.
+		return errors.Join(fmt.Errorf("shut down http server: %w", err), server.Close())
 	}
 	if err := <-serveErr; !errors.Is(err, http.ErrServerClosed) {
 		return fmt.Errorf("serve http: %w", err)
@@ -153,8 +156,8 @@ func connectDB(ctx context.Context, url string) (*pgxpool.Pool, error) {
 	defer cancel()
 	if err := pool.Ping(pingCtx); err != nil {
 		pool.Close()
-		conn := pool.Config().ConnConfig
-		return nil, fmt.Errorf("connect to database at %s:%d: %w", conn.Host, conn.Port, err)
+		// pgx's error names the host and port it tried (never the password).
+		return nil, fmt.Errorf("connect to database: %w", err)
 	}
 	return pool, nil
 }

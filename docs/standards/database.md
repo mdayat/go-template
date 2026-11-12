@@ -47,6 +47,8 @@ migration must work with the code before it **and** after it. Atlas Community do
 - `sqlc.yaml` maps `uuid` to `uuid.UUID`, `timestamptz` to `time.Time`, and nullable arguments
   to pointers, so services see plain Go types.
 - Every list query has a `LIMIT` and an index for its `ORDER BY` ([http-api.md](http-api.md#ids-and-paging)).
+- Postgres `text` can't hold the NUL character (JSON `"\u0000"`), and an insert with one fails as
+  a 500. Reject it in the service with the field's other rules (`cleanTitle`).
 - Business rules that must hold even when two requests race (unique titles, positive balances)
   are constraints in the schema, not a "check, then write" in Go. Name every constraint: the service
   matches it by name ([errors.md](errors.md#turning-driver-errors-into-kinds)).

@@ -93,12 +93,12 @@ func (d *bodyDecoder) decode(w http.ResponseWriter, r *http.Request, dst any) er
 // decodeError turns a JSON decoding error into a reply the client can act on.
 func decodeError(err error) error {
 	var (
-		syntaxErr    *json.SyntaxError
-		typeErr      *json.UnmarshalTypeError
-		invalidUnmar *json.InvalidUnmarshalError
+		syntaxErr  *json.SyntaxError
+		typeErr    *json.UnmarshalTypeError
+		invalidErr *json.InvalidUnmarshalError
 	)
 	switch {
-	case errors.As(err, &invalidUnmar):
+	case errors.As(err, &invalidErr):
 		return fmt.Errorf("decode request body: %w", err) // dst isn't a pointer: our bug
 	case errors.As(err, &syntaxErr):
 		return apperr.BadRequest(fmt.Sprintf("request body is not valid JSON (at byte %d)", syntaxErr.Offset))

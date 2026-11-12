@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/rs/zerolog"
@@ -57,6 +58,8 @@ func problemRouter(t *testing.T) (http.Handler, *bytes.Buffer) {
 	}
 	router.Post("/tasks", func(http.ResponseWriter, *http.Request) {})
 	router.Get("/tasks", func(http.ResponseWriter, *http.Request) {})
+	router.Get("/tasks/{id}", func(http.ResponseWriter, *http.Request) {})
+	router.Delete("/tasks/{id}", func(http.ResponseWriter, *http.Request) {})
 	return router, &logs
 }
 
@@ -221,11 +224,81 @@ func TestMethodNotAllowedListsAllowedMethods(t *testing.T) {
 	t.Parallel()
 	router, _ := problemRouter(t)
 
-	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodDelete, "/tasks", nil))
+	tests := []struct {
+		name, method, target, wantAllow string
+	}{
+		{"GET routes answer HEAD too", http.MethodDelete, "/tasks", "GET, HEAD, POST"},
+		// chi routes an encoded path by its raw form; Allow must be built from the same form.
+		{"encoded slash in the path", http.MethodPut, "/tasks/a%2Fb", "GET, HEAD, DELETE"},
+	}
+	for _, tt := range tests {
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), tt.method, tt.target, nil))
+		if rec.Code != http.StatusMethodNotAllowed || rec.Header().Get("Allow") != tt.wantAllow {
+			t.Errorf("%s: %s %s = %d, Allow %q; want 405, Allow %q",
+				tt.name, tt.method, tt.target, rec.Code, rec.Header().Get("Allow"), tt.wantAllow)
+		}
+	}
+}
 
-	if got := rec.Header().Get("Allow"); got != "GET, POST" {
-		t.Errorf("Allow = %q, want %q", got, "GET, POST")
+func TestHeadIsServedByGetRoutes(t *testing.T) {
+	t.Parallel()
+	router, _ := problemRouter(t)
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodHead, "/tasks", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("HEAD /tasks = %d, want 200", rec.Code)
+	}
+}
+
+func TestRequestsHaveATimeLimit(t *testing.T) {
+	t.Parallel()
+	router := newBaseRouter(zerolog.Nop())
+	router.Get("/deadline", func(w http.ResponseWriter, r *http.Request) {
+		deadline, ok := r.Context().Deadline()
+		if !ok || time.Until(deadline) > requestTimeout {
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+	})
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/deadline", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200: the request's context has no deadline of at most %s", rec.Code, requestTimeout)
+	}
+}
+
+// When the time limit runs out, the caller gets a 503 and the summary line shows it at error level,
+// not as a client that hung up (499).
+func TestRequestOverTheTimeLimitIs503(t *testing.T) {
+	t.Parallel()
+	var logs bytes.Buffer
+	router := newBaseRouter(zerolog.New(&logs))
+	router.With(limitRequestTime(10*time.Millisecond)).Get("/slow", Handle(func(_ http.ResponseWriter, r *http.Request) error {
+		<-r.Context().Done()
+		return fmt.Errorf("list tasks: %w", r.Context().Err())
+	}))
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/slow", nil))
+
+	var got problem
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("reply is not JSON: %q: %v", rec.Body, err)
+	}
+	if rec.Code != http.StatusServiceUnavailable || got.Detail != "the request took too long" {
+		t.Errorf("reply = %d %q, want 503 %q", rec.Code, got.Detail, "the request took too long")
+	}
+	lines := logLines(t, &logs)
+	if len(lines) != 1 {
+		t.Fatalf("log lines = %d, want 1", len(lines))
+	}
+	want := lineSummary{level: "error", status: 503, message: "list tasks: context deadline exceeded"}
+	if got := summarize(lines[0]); got != want {
+		t.Errorf("summary line = %+v, want %+v", got, want)
 	}
 }
 

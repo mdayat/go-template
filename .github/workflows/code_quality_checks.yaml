@@ -8,9 +8,16 @@ on:
     branches:
       - main
 
+# Read-only token: no step writes to the repository, so a compromised action or dependency can't
+# either.
+permissions:
+  contents: read
+
 jobs:
   check:
     runs-on: ubuntu-latest
+    # A hung step (a test waiting forever) fails here instead of after GitHub's 6-hour default.
+    timeout-minutes: 20
 
     steps:
       - name: Checkout

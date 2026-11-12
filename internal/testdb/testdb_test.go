@@ -15,11 +15,11 @@ func checkEveryMigrationApplied(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
 	root, err := repoRoot()
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("repoRoot() error = %v", err)
 	}
 	files, err := filepath.Glob(filepath.Join(root, "db", "migrations", "*.sql"))
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("list migration files: %v", err)
 	}
 	var applied int
 	err = pool.QueryRow(t.Context(), "SELECT count(*) FROM atlas_schema_revisions.atlas_schema_revisions").Scan(&applied)
@@ -48,6 +48,7 @@ func TestLocalURLRefusesOtherHosts(t *testing.T) {
 		{"no host", "postgres:///postgres", false},
 		{"key=value form", "host=localhost dbname=postgres", false},
 		{"another database", "mysql://u:p@localhost:3306/app", false},
+		{"database as a parameter", "postgres://u:p@localhost:5432/postgres?dbname=postgres", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -78,7 +79,7 @@ func TestNewGivesEachTestItsOwnMigratedDatabase(t *testing.T) {
 				}
 				var name string
 				if err := pool.QueryRow(t.Context(), "SELECT current_database()").Scan(&name); err != nil {
-					t.Fatal(err)
+					t.Fatalf("read current_database(): %v", err)
 				}
 				names <- name
 			})
@@ -93,7 +94,7 @@ func TestNewGivesEachTestItsOwnMigratedDatabase(t *testing.T) {
 		err := observer.QueryRow(t.Context(),
 			"SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname = $1)", name).Scan(&exists)
 		if err != nil {
-			t.Fatal(err)
+			t.Fatalf("look up database %s: %v", name, err)
 		}
 		if exists {
 			t.Errorf("database %s still exists after its test passed", name)
@@ -117,7 +118,7 @@ func TestNewKeepsAFailedTestsDatabase(t *testing.T) {
 	t.Run("failing", func(t *testing.T) {
 		pool := New(failedT{t})
 		if err := pool.QueryRow(t.Context(), "SELECT current_database()").Scan(&name); err != nil {
-			t.Fatal(err)
+			t.Fatalf("read current_database(): %v", err)
 		}
 	})
 
@@ -125,7 +126,7 @@ func TestNewKeepsAFailedTestsDatabase(t *testing.T) {
 	err := shared.srv.admin.QueryRow(t.Context(),
 		"SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname = $1)", name).Scan(&exists)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("look up database %s: %v", name, err)
 	}
 	if !exists {
 		t.Fatalf("database %s was dropped, want it kept after a failed test", name)

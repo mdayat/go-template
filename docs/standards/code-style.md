@@ -18,8 +18,11 @@ standard library / others / this module); don't format by hand.
 - Don't repeat the package in a name: `task.Service`, not `task.TaskService`. — review
 - Package names are short lowercase nouns that say what's inside. Never `util`, `common`,
   `helpers`, `models`: they say nothing and collect unrelated code. — review
-- Receivers are one or two letters from the type, the same in every method: `func (s *Service)`.
-  — lint (revive `receiver-naming`)
+- Receivers are one or two letters from the type, the same in every method: `func (s *Service)`,
+  `func (tr taskRoutes)`. — the same in every method: lint (revive `receiver-naming`); short and
+  from the type: review
+- Don't rename an import unless two imports clash or the package name is unclear
+  (`stdlog "log"` next to zerolog's `log` is fine; alone it isn't). — review
 - No `Get` prefix on getters (`Title()`, not `GetTitle()`); don't write getters or setters for a
   struct field at all unless an interface needs them. — review
 - Constants are mixed caps like everything else (`maxBodyBytes`), never `MAX_BODY_BYTES`. — lint
@@ -35,7 +38,8 @@ standard library / others / this module); don't format by hand.
   (gochecknoinits)
 - Group related constants in one `const (...)` block. Use `iota` only when the values don't matter
   (they're never stored or sent); set values explicitly when they do. — review
-- Name struct fields in literals: `Task{ID: id, Title: t}`. — review
+- Name the fields in struct literals: `Task{ID: id, Title: t}`. Always for another package's type;
+  for our own, leave them out only in table-test rows whose struct is declared right above. — review
 - Prefer `make([]T, 0, n)` when the size is known, so the slice doesn't regrow. — review
 
 ## Functions and control flow
@@ -72,7 +76,10 @@ standard library / others / this module); don't format by hand.
 The rules for which error to return live in [errors.md](errors.md). Style only:
 
 - Error strings are lowercase with no final punctuation: they get wrapped into longer messages.
-  — lint (revive `error-strings`)
+  A string may start with a name that's capitalized anyway (`DATABASE_URL is required`,
+  `HTTP ...`). — lint (revive `error-strings`)
+- Put `%w` at the end (`"read config: %w"`), so the chain reads outermost first; don't repeat what
+  the wrapped error already says (pgx's errors name the host they tried). — review
 - Wrap with `%w` to keep the cause, and compare with `errors.Is` / `errors.As` (or
   `errors.AsType`), never `==` or a type assertion on a wrapped error. — lint (errorlint)
 - An error type's name ends in `Error`; a sentinel's starts with `Err`. — lint (errname)
@@ -89,7 +96,7 @@ The rules for which error to return live in [errors.md](errors.md). Style only:
 ## Comments
 
 - Every exported name has a doc comment, a full sentence that starts with the name. — lint
-  (revive `exported`)
+  (revive `exported`). Unexported names that have a doc comment follow the same form. — review
 - Comments say *why*: a reason, a trap, what breaks if the line changes. Don't restate what the
   code says, and don't tell its history (that's the commit message's job). — review
 - A `//nolint` names the linter and gives the reason: `//nolint:gosec // G204: no shell, our own

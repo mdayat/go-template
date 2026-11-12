@@ -3,7 +3,7 @@ package api
 import (
 	"errors"
 	"fmt"
-	stdlog "log"
+	"log"
 	"net"
 	"net/http"
 	"runtime/debug"
@@ -86,7 +86,7 @@ type recovery struct {
 // serve runs next and recovers a panic: it attaches the panic and stack to the summary line and
 // replies 500, or, if the reply had already started, sets midReply so the caller cuts the
 // connection after logging. http.ErrAbortHandler, a deliberate abort, passes through untouched.
-func (rec *recovery) serve(next http.Handler, ww middleware.WrapResponseWriter, r *http.Request) {
+func (rc *recovery) serve(next http.Handler, ww middleware.WrapResponseWriter, r *http.Request) {
 	defer func() {
 		p := recover()
 		if p == nil {
@@ -96,14 +96,14 @@ func (rec *recovery) serve(next http.Handler, ww middleware.WrapResponseWriter, 
 			panic(p)
 		}
 
-		rec.panicked = true
+		rc.panicked = true
 		hlog.FromRequest(r).UpdateContext(func(c zerolog.Context) zerolog.Context {
 			return c.Dict("error", zerolog.Dict().
 				Str("message", fmt.Sprintf("panic: %v", p)).
 				Str("stack_trace", string(debug.Stack())))
 		})
 		if ww.Status() != 0 {
-			rec.midReply = true
+			rc.midReply = true
 			return
 		}
 		writeProblem(ww, r, newProblem(http.StatusInternalServerError, internalErrorDetail))
@@ -128,8 +128,8 @@ func clientFields(remoteAddr string) *zerolog.Event {
 // ServerErrorLog returns a logger for http.Server.ErrorLog, so the server's own errors (a panic in
 // middleware that runs before logRequests, a broken connection) reach the JSON log instead of
 // plain-text stderr.
-func ServerErrorLog(logger zerolog.Logger) *stdlog.Logger {
-	return stdlog.New(serverErrorWriter{logger: logger}, "", 0)
+func ServerErrorLog(logger zerolog.Logger) *log.Logger {
+	return log.New(serverErrorWriter{logger: logger}, "", 0)
 }
 
 type serverErrorWriter struct {

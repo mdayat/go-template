@@ -32,6 +32,8 @@ func testRouter(t *testing.T) (http.Handler, *bytes.Buffer) {
 		w.WriteHeader(http.StatusInternalServerError)
 	})
 	router.Get("/silent", func(http.ResponseWriter, *http.Request) {})
+	// Replaces the base router's health check (chi keeps the last route registered for a path), so
+	// a test can make it fail with ?down.
 	router.Get(healthPath, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Has("down") {
 			w.WriteHeader(http.StatusServiceUnavailable)
@@ -40,7 +42,11 @@ func testRouter(t *testing.T) (http.Handler, *bytes.Buffer) {
 	return router, &logs
 }
 
-// logLines parses each JSON log line, dropping the fields that change on every run.
+// anyNumber stands in for a duration_ms that is a number, whatever its value.
+const anyNumber = "<a number>"
+
+// logLines parses each JSON log line. request_id, new on every run, is dropped; a numeric
+// duration_ms becomes anyNumber, so a missing or non-numeric one still fails a comparison.
 func logLines(t *testing.T, logs *bytes.Buffer) []map[string]any {
 	t.Helper()
 	var lines []map[string]any
@@ -50,10 +56,9 @@ func logLines(t *testing.T, logs *bytes.Buffer) []map[string]any {
 		if err := json.Unmarshal(scanner.Bytes(), &line); err != nil {
 			t.Fatalf("log line is not JSON: %q: %v", scanner.Text(), err)
 		}
-		if _, ok := line["duration_ms"].(float64); !ok {
-			t.Errorf("duration_ms missing or not a number in %v", line)
+		if _, ok := line["duration_ms"].(float64); ok {
+			line["duration_ms"] = anyNumber
 		}
-		delete(line, "duration_ms")
 		delete(line, "request_id")
 		lines = append(lines, line)
 	}
@@ -80,12 +85,13 @@ func summaryLine(level, path, route string, status, size int) map[string]any {
 		httpFields["route"] = route
 	}
 	return map[string]any{
-		"level":      level,
-		"http":       httpFields,
-		"url":        map[string]any{"path": path},
-		"user_agent": map[string]any{"original": "test-agent"},
-		"client":     map[string]any{"ip": "192.0.2.1", "port": float64(1234)},
-		"message":    "request completed",
+		"level":       level,
+		"http":        httpFields,
+		"url":         map[string]any{"path": path},
+		"user_agent":  map[string]any{"original": "test-agent"},
+		"client":      map[string]any{"ip": "192.0.2.1", "port": float64(1234)},
+		"duration_ms": anyNumber,
+		"message":     "request completed",
 	}
 }
 

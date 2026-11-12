@@ -62,5 +62,5 @@ field sticks to every later line of the whole process. `recordError` in
 ## Outside requests
 
 Startup and shutdown use the global `log.Logger`: `api listening` (with `addr` and the build's
-`version`), `shutting down`, `api stopped cleanly`. Errors from Go's HTTP server itself (a bad TLS
-handshake) go through `api.ServerErrorLog` into the same JSON log.
+`version`), `shutting down`, `api stopped cleanly`. Errors from Go's HTTP server itself (a failed
+accept, a handler writing headers twice) go through `api.ServerErrorLog` into the same JSON log.

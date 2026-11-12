@@ -111,4 +111,5 @@ Build both images with `make image` (on an arm64 Mac, for amd64 servers:
 3. Point the platform's health check at `GET /healthz` on port 8080. The image has no shell, so a
    Docker `HEALTHCHECK` can't run inside it.
 
-The app stops cleanly on SIGTERM: it finishes running requests (up to 15 s) and refuses new ones.
+The app stops cleanly on SIGTERM: it refuses new requests, gives running ones up to 15 s, then
+closes whatever is left and exits.

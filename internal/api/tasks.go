@@ -24,12 +24,12 @@ type taskRoutes struct {
 	decoder *bodyDecoder
 }
 
-func (h taskRoutes) mount(r chi.Router) {
-	r.Post("/tasks", Handle(h.create))
-	r.Get("/tasks", Handle(h.list))
-	r.Get("/tasks/{id}", Handle(h.get))
-	r.Patch("/tasks/{id}", Handle(h.update))
-	r.Delete("/tasks/{id}", Handle(h.delete))
+func (tr taskRoutes) mount(r chi.Router) {
+	r.Post("/tasks", Handle(tr.create))
+	r.Get("/tasks", Handle(tr.list))
+	r.Get("/tasks/{id}", Handle(tr.get))
+	r.Patch("/tasks/{id}", Handle(tr.update))
+	r.Delete("/tasks/{id}", Handle(tr.delete))
 }
 
 type createTaskRequest struct {
@@ -56,12 +56,12 @@ type taskListResponse struct {
 	NextCursor string `json:"next_cursor,omitempty"`
 }
 
-func (h taskRoutes) create(w http.ResponseWriter, r *http.Request) error {
+func (tr taskRoutes) create(w http.ResponseWriter, r *http.Request) error {
 	var req createTaskRequest
-	if err := h.decoder.decode(w, r, &req); err != nil {
+	if err := tr.decoder.decode(w, r, &req); err != nil {
 		return err
 	}
-	t, err := h.tasks.Create(r.Context(), req.Title)
+	t, err := tr.tasks.Create(r.Context(), req.Title)
 	if err != nil {
 		return err
 	}
@@ -70,7 +70,7 @@ func (h taskRoutes) create(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-func (h taskRoutes) list(w http.ResponseWriter, r *http.Request) error {
+func (tr taskRoutes) list(w http.ResponseWriter, r *http.Request) error {
 	query := r.URL.Query()
 	limit := defaultPageSize
 	if raw := query.Get("limit"); raw != "" {
@@ -89,7 +89,7 @@ func (h taskRoutes) list(w http.ResponseWriter, r *http.Request) error {
 		after = &cursor
 	}
 
-	page, err := h.tasks.List(r.Context(), limit, after)
+	page, err := tr.tasks.List(r.Context(), limit, after)
 	if err != nil {
 		return err
 	}
@@ -104,12 +104,12 @@ func (h taskRoutes) list(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-func (h taskRoutes) get(w http.ResponseWriter, r *http.Request) error {
+func (tr taskRoutes) get(w http.ResponseWriter, r *http.Request) error {
 	id, err := taskID(r)
 	if err != nil {
 		return err
 	}
-	t, err := h.tasks.Get(r.Context(), id)
+	t, err := tr.tasks.Get(r.Context(), id)
 	if err != nil {
 		return err
 	}
@@ -117,16 +117,16 @@ func (h taskRoutes) get(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-func (h taskRoutes) update(w http.ResponseWriter, r *http.Request) error {
+func (tr taskRoutes) update(w http.ResponseWriter, r *http.Request) error {
 	id, err := taskID(r)
 	if err != nil {
 		return err
 	}
 	var req updateTaskRequest
-	if err := h.decoder.decode(w, r, &req); err != nil {
+	if err := tr.decoder.decode(w, r, &req); err != nil {
 		return err
 	}
-	t, err := h.tasks.Update(r.Context(), id, task.Changes{Title: req.Title, Done: req.Done})
+	t, err := tr.tasks.Update(r.Context(), id, task.Changes{Title: req.Title, Done: req.Done})
 	if err != nil {
 		return err
 	}
@@ -134,12 +134,12 @@ func (h taskRoutes) update(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-func (h taskRoutes) delete(w http.ResponseWriter, r *http.Request) error {
+func (tr taskRoutes) delete(w http.ResponseWriter, r *http.Request) error {
 	id, err := taskID(r)
 	if err != nil {
 		return err
 	}
-	if err := h.tasks.Delete(r.Context(), id); err != nil {
+	if err := tr.tasks.Delete(r.Context(), id); err != nil {
 		return err
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -161,13 +161,14 @@ func toTaskResponse(t task.Task) taskResponse {
 		ID:    t.ID,
 		Title: t.Title,
 		Done:  t.Done,
-		// pgx returns times in the server's time zone; replies always use UTC.
+		// pgx returns times in this process's local time zone; replies always use UTC.
 		CreatedAt: t.CreatedAt.UTC(),
 		UpdatedAt: t.UpdatedAt.UTC(),
 	}
 }
 
-// A cursor is opaque to clients: base64url of "<created_at RFC 3339>|<id>" of a page's last task.
+// encodeCursor makes the cursor for the page after c. It's opaque to clients: base64url of
+// "<created_at RFC 3339>|<id>" of a page's last task.
 func encodeCursor(c task.Cursor) string {
 	return base64.RawURLEncoding.EncodeToString([]byte(c.CreatedAt.UTC().Format(time.RFC3339Nano) + "|" + c.ID.String()))
 }

@@ -34,7 +34,7 @@ Never edit `internal/db/` (generated) or a migration that's already merged (writ
 
 **HTTP** ([http-api.md](docs/standards/http-api.md))
 - Handlers are `func(w, r) error`, wrapped with `Handle`. Read JSON bodies only with
-  `h.decoder.decode`; write replies only with `writeJSON`.
+  `tr.decoder.decode`; write replies only with `writeJSON`.
 - `validate` tags check shape; the service checks meaning.
 - Lists: an object with a list field, cursor paging, never `null` for an empty list.
 
@@ -48,6 +48,7 @@ Never edit `internal/db/` (generated) or a migration that's already merged (writ
   rename or drop a column over several deploys; big-table indexes `CONCURRENTLY` with
   `-- atlas:txmode none`.
 - Rules that must hold under concurrent requests are schema constraints, with names.
+- Text going into a `text` column is checked for NUL (`\u0000`) in the service; Postgres refuses it.
 - Retry a transaction only on 40001 and 40P01, and never do outside calls inside it.
 
 **Tests** ([testing.md](docs/standards/testing.md))

@@ -50,7 +50,8 @@ Go's JSON reading (go-json and the standard library alike, with no setting to ch
 ```
 
 `detail` and `message` are for people; clients branch on `status` and the field's `rule`. Unknown
-paths get a 404 problem and wrong methods a 405 with an `Allow` header. An error reply drops any
+paths get a 404 problem and wrong methods a 405 with an `Allow` header. Every GET route also
+answers HEAD (HTTP requires it; uptime checkers use it). An error reply drops any
 headers the handler had set that describe a body (`Content-Encoding`, `Cache-Control`, `ETag`,
 ...), since they'd misdescribe the problem.
 
@@ -65,7 +66,16 @@ headers the handler had set that describe a body (`Content-Encoding`, `Cache-Con
 
 ## Server settings
 
-Timeouts are set in `cmd/api/main.go` (read header 5 s, read 10 s, write 10 s, idle 120 s). On
-SIGTERM the server stops taking new requests, waits up to 15 s for running ones, then exits. An
-endpoint that needs longer (a large upload, a report) needs its own timeout, set with
-`http.ResponseController` in that handler, not a higher limit for everyone.
+Connection timeouts are set in `cmd/api/main.go` (read header 5 s, read 10 s, write 10 s, idle
+120 s). Those cut a slow connection but don't stop the handler, so each request's context also
+ends after 8 s (`requestTimeout` in `internal/api/router.go`): its queries are cancelled and the
+caller gets a 503, "the request took too long". Pass `r.Context()` to everything a handler calls,
+or the time limit can't stop it.
+
+On SIGTERM the server stops taking new requests and waits up to 15 s for running ones. Any still
+running then have their connections closed, which cancels their contexts, and the process exits.
+
+An endpoint that needs longer (a large upload, a report) sets its own limits in that handler, not
+a higher limit for everyone: `context.WithTimeout(context.WithoutCancel(r.Context()), d)` (a
+context made from `r.Context()` alone can't outlive its 8 s; this one also no longer stops when the
+client leaves), and `http.ResponseController` for the write deadline.

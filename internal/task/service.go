@@ -170,6 +170,10 @@ func cleanTitle(title string) (string, error) {
 		return "", apperr.Invalid("the title is invalid", apperr.FieldError{
 			Field: "title", Rule: "max", Message: fmt.Sprintf("must be at most %d characters long", MaxTitleLength),
 		})
+	case strings.ContainsRune(title, 0):
+		// Postgres text can't hold NUL (JSON "\u0000"): the insert would fail as a 500.
+		return "", apperr.Invalid("the title is invalid",
+			apperr.FieldError{Field: "title", Rule: "no_nul", Message: "must not contain the NUL character"})
 	}
 	return title, nil
 }

@@ -47,11 +47,14 @@ func Load() (Config, error) {
 	}
 
 	logLevel := getenv("LOG_LEVEL", "info")
-	level, err := zerolog.ParseLevel(logLevel)
-	if err != nil {
+	// Only these five: zerolog also accepts "disabled", "panic", "fatal" and numbers, which would
+	// silently drop error lines.
+	switch level, _ := zerolog.ParseLevel(logLevel); level {
+	case zerolog.TraceLevel, zerolog.DebugLevel, zerolog.InfoLevel, zerolog.WarnLevel, zerolog.ErrorLevel:
+		cfg.LogLevel = level
+	default:
 		errs = append(errs, fmt.Errorf("LOG_LEVEL must be trace, debug, info, warn or error, got %q", logLevel))
 	}
-	cfg.LogLevel = level
 
 	if err := errors.Join(errs...); err != nil {
 		return Config{}, fmt.Errorf("invalid config: %w", err)

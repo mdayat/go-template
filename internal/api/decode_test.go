@@ -20,6 +20,10 @@ type testTask struct {
 	Status   string     `json:"status" validate:"omitempty,oneof=todo done"`
 	Tags     []string   `json:"tags" validate:"max=2"`
 	Items    []testItem `json:"items" validate:"dive"`
+	// One field per JSON type, for the "wrong type" messages.
+	Done   bool              `json:"done"`
+	Weight float64           `json:"weight"`
+	Meta   map[string]string `json:"meta"`
 }
 
 type testItem struct {
@@ -31,6 +35,10 @@ type testLimits struct {
 	Title string   `json:"title" validate:"min=3"`
 	Tags  []string `json:"tags" validate:"len=2"`
 	Score int      `json:"score" validate:"gt=0"`
+	Site  string   `json:"site" validate:"omitempty,url"`
+	Ref   string   `json:"ref" validate:"omitempty,uuid"`
+	Small int      `json:"small" validate:"lt=10"`
+	Code  string   `json:"code" validate:"omitempty,alpha"` // a rule ruleMessage has no wording for
 }
 
 // decodeRouter echoes a decoded testTask, so a test sees exactly what decode produced.
@@ -113,6 +121,10 @@ func TestDecodeRejectsBadBodies(t *testing.T) {
 		{"syntax error", "/tasks", "application/json", `{"name" "a"}`, 400, "request body is not valid JSON (at byte 9)"},
 		{"cut-off body", "/tasks", "application/json", `{"name":"a"`, 400, "request body is not valid JSON (it ends too early)"},
 		{"wrong type", "/tasks", "application/json", `{"name":"a","priority":"high"}`, 400, `field "priority" must be a whole number`},
+		{"wrong type: boolean", "/tasks", "application/json", `{"name":"a","priority":1,"done":"yes"}`, 400, `field "done" must be true or false`},
+		{"wrong type: number", "/tasks", "application/json", `{"name":"a","priority":1,"weight":"heavy"}`, 400, `field "weight" must be a number`},
+		{"wrong type: array", "/tasks", "application/json", `{"name":"a","priority":1,"tags":"x"}`, 400, `field "tags" must be an array`},
+		{"wrong type: object", "/tasks", "application/json", `{"name":"a","priority":1,"meta":[1]}`, 400, `field "meta" must be an object`},
 		{"wrong type inside a list", "/tasks", "application/json", `{"name":"a","priority":1,"items":[{"title":5}]}`, 400, `field "items[0].title" must be a string`},
 		{"unknown field", "/tasks", "application/json", `{"name":"a","priority":1,"colour":"red"}`, 400, `unknown field "colour"`},
 		{"two JSON values", "/tasks", "application/json", valid + valid, 400, "request body must hold a single JSON value"},
@@ -167,7 +179,7 @@ func TestDecodeReportsRuleBreaksByJSONName(t *testing.T) {
 
 func TestRuleMessageWordsLimitsByKind(t *testing.T) {
 	t.Parallel()
-	rec := postJSON(t, decodeRouter(t), "/limits", "application/json", `{"title":"ab","tags":["x"],"score":0}`)
+	rec := postJSON(t, decodeRouter(t), "/limits", "application/json", `{"title":"ab","tags":["x"],"score":0,"site":"not a url","ref":"x","small":10,"code":"a1"}`)
 
 	var reply problem
 	if err := json.Unmarshal(rec.Body.Bytes(), &reply); err != nil {
@@ -181,6 +193,10 @@ func TestRuleMessageWordsLimitsByKind(t *testing.T) {
 		"title": "must be at least 3 characters long",
 		"tags":  "must be exactly 2 items",
 		"score": "must be more than 0",
+		"site":  "must be a URL",
+		"ref":   "must be a UUID",
+		"small": "must be less than 10",
+		"code":  "is invalid",
 	}
 	if diff := cmp.Diff(want, got); diff != "" {
 		t.Errorf("messages mismatch (-want +got):\n%s", diff)

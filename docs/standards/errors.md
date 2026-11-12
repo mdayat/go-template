@@ -42,7 +42,7 @@ isn't silently reported as the wrong conflict.
 Handlers have the type `func(w, r) error` and are wrapped with `Handle`:
 
 ```go
-r.Get("/tasks/{id}", Handle(h.get))
+r.Get("/tasks/{id}", Handle(tr.get))
 ```
 
 `Handle` writes the reply for a returned error ([RFC 9457](https://www.rfc-editor.org/rfc/rfc9457)
@@ -64,6 +64,13 @@ return errors for everything else.
 If the client disconnects, the request's context is cancelled and queries fail with
 `context.Canceled`. That's not a server failure: nothing is written, and the summary line shows
 status 499 at info level, not a 5xx at error level.
+
+## Too slow
+
+Every request's context ends after 8 s ([http-api.md](http-api.md#server-settings)). A handler
+whose query is cut off by it returns the `context.DeadlineExceeded` error as usual; the caller gets
+a 503 "the request took too long", and the summary line logs it at error level, since a slow
+endpoint is our problem.
 
 ## Don't
 

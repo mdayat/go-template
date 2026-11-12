@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -69,7 +70,13 @@ func writeError(w http.ResponseWriter, r *http.Request, err error) {
 		// Headers are already sent; a second status can't be sent.
 		return
 	}
-	writeProblem(w, r, problemFor(err))
+	p := problemFor(err)
+	// The request's own time limit ran out (limitRequestTime): our failure, and one a client may
+	// retry, unlike a plain 500.
+	if errors.Is(err, context.DeadlineExceeded) && errors.Is(r.Context().Err(), context.DeadlineExceeded) {
+		p = newProblem(http.StatusServiceUnavailable, "the request took too long")
+	}
+	writeProblem(w, r, p)
 }
 
 // problemFor maps an error to its reply. Only a *statusError's or *apperr.Error's detail reaches the
@@ -171,12 +178,20 @@ func notFound(w http.ResponseWriter, r *http.Request) {
 // header only in its built-in handler, so it's rebuilt here by asking the router about each method.
 func methodNotAllowed(router chi.Routes) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// The path chi routed on: the raw form when the request has one (an encoded "/" as %2F), so
+		// the match below sees the same path.
+		path := r.URL.RawPath
+		if path == "" {
+			path = r.URL.Path
+		}
 		var allowed []string
 		for _, method := range []string{
 			http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut,
 			http.MethodPatch, http.MethodDelete, http.MethodOptions,
 		} {
-			if router.Match(chi.NewRouteContext(), method, r.URL.Path) {
+			// GET routes answer HEAD too (middleware.GetHead in newBaseRouter).
+			getAnswersHead := method == http.MethodHead && slices.Contains(allowed, http.MethodGet)
+			if getAnswersHead || router.Match(chi.NewRouteContext(), method, path) {
 				allowed = append(allowed, method)
 			}
 		}
