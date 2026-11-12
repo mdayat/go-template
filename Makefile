@@ -12,7 +12,7 @@ TOOL := go tool -modfile=tools/go.mod
 # the app's .env loader accepts: KEY=value, KEY="value", KEY='value', export KEY=value.
 export DATABASE_URL ?= $(shell sed -nE "s/^(export[[:space:]]+)?DATABASE_URL=[\"']?([^\"']*)[\"']?[[:space:]]*$$/\2/p" .env 2>/dev/null | tail -n 1)
 
-.PHONY: fmt lint test vuln build run db-up db-down generate migrate-diff migrate-apply
+.PHONY: fmt lint test test-db-clean vuln build run db-up db-down generate migrate-diff migrate-apply
 
 fmt:
 	$(TOOL) golangci-lint fmt ./...
@@ -20,8 +20,15 @@ fmt:
 lint:
 	$(TOOL) golangci-lint run ./...
 
-test:
+# Tests get their own databases on the compose Postgres (TEST_DATABASE_URL), so it must be up.
+test: db-up
 	go test -race -shuffle=on ./...
+
+# Drop the databases failed tests kept, and masters an interrupted run left. Not while tests run.
+test-db-clean:
+	docker compose exec -T postgres psql -U postgres -Atc \
+		"SELECT format('DROP DATABASE %I;', datname) FROM pg_database WHERE datname LIKE 'gotest\_%'" \
+		| docker compose exec -T postgres psql -U postgres -q
 
 vuln:
 	$(TOOL) govulncheck ./...

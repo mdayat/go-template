@@ -35,5 +35,18 @@ jobs:
       - name: Check for known vulnerabilities
         run: make vuln
 
+      # Tests apply db/migrations with Atlas. Pinned by version and checksum, Community edition.
+      - name: Install Atlas
+        env:
+          ATLAS_VERSION: v1.3.0
+          ATLAS_SHA256: 10d7913e3dce43ab99b8d71534a4cbadaf11a16dc293adf3b91d10e83a0ac70b
+        run: |
+          curl -sSfL -o atlas "https://atlasbinaries.com/atlas/atlas-community-linux-amd64-$ATLAS_VERSION"
+          echo "$ATLAS_SHA256  atlas" | sha256sum --check
+          sudo install atlas /usr/local/bin/atlas
+          atlas version
+
       - name: Test
+        env:
+          TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
         run: make test

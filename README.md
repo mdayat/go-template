@@ -7,8 +7,8 @@ This repository serves as a template for speeding up project scaffolding for Go 
 - **Dockerfile**: Pre-configured Dockerfile for containerizing your Go application.
 - **.golangci.yml**: Configuration for `golangci-lint`, which runs `revive`, `staticcheck` and other linters.
 - **tools/go.mod**: Pins `golangci-lint`, `sqlc` and `govulncheck`, run with `go tool -modfile=tools/go.mod`.
-- **Makefile**: `fmt`, `lint`, `test`, `vuln`, `build`, `run`, `db-up`, `db-down`, `generate`,
-  `migrate-diff` and `migrate-apply`, all on the Go version in `go.mod`.
+- **Makefile**: `fmt`, `lint`, `test`, `test-db-clean`, `vuln`, `build`, `run`, `db-up`, `db-down`,
+  `generate`, `migrate-diff` and `migrate-apply`, all on the Go version in `go.mod`.
 - **Database**: `db/schema.sql` is the schema as it should be. [Atlas](https://atlasgo.io)
   (Community edition) writes migrations from it into `db/migrations`, and
   [sqlc](https://sqlc.dev) turns the queries in `db/queries` into typed Go in `internal/db`.
@@ -16,7 +16,11 @@ This repository serves as a template for speeding up project scaffolding for Go 
   unique) and turns database errors into `apperr` kinds; `internal/api/tasks.go` serves
   `POST/GET /tasks` (newest first, paged with `?limit=` and `?after=<next_cursor>`) and
   `GET/PATCH/DELETE /tasks/{id}`. Copy its shape for new features, then delete it.
-- **compose.yaml**: Postgres 17 for local runs.
+- **compose.yaml**: Postgres 17 for local runs and tests.
+- **`internal/testdb`**: `testdb.New(t)` gives a test its own database with every migration applied,
+  copied from a master database built once per package, so tests run in parallel without sharing
+  rows. A failed test's database is kept and its name logged. `internal/api/tasks_test.go` shows the
+  style: real router, real Postgres, checking the reply and the rows.
 - **.example.env**: Every setting the app reads, with local defaults.
 - **zerolog**: A fast and structured logger for Go.
 - **`internal/config`**: Loads settings from the environment and reports every missing or invalid one at once.
@@ -37,8 +41,8 @@ This repository serves as a template for speeding up project scaffolding for Go 
 
 - Go 1.21 or newer (`make` downloads the exact version in `go.mod`)
 - Docker
-- [Atlas](https://atlasgo.io), Community edition: `brew install atlas` (Homebrew's build is the
-  Apache-2.0 Community one; `atlas version` says "community")
+- [Atlas](https://atlasgo.io) (migrations and tests), Community edition: `brew install atlas`
+  (Homebrew's build is the Apache-2.0 Community one; `atlas version` says "community")
 
 ### Installation
 
@@ -62,6 +66,12 @@ This repository serves as a template for speeding up project scaffolding for Go 
    make migrate-apply
    make run
    ```
+
+### Running tests
+
+`make test` starts Postgres and runs every test. Tests use `TEST_DATABASE_URL` from the
+environment or `.env` (see `.example.env`), and refuse any host but localhost. A failed test's
+database is kept for a look; `make test-db-clean` drops them all.
 
 ### Changing the database
 
