@@ -12,7 +12,8 @@ TOOL := go tool -modfile=tools/go.mod
 # the app's .env loader accepts: KEY=value, KEY="value", KEY='value', export KEY=value.
 export DATABASE_URL ?= $(shell sed -nE "s/^(export[[:space:]]+)?DATABASE_URL=[\"']?([^\"']*)[\"']?[[:space:]]*$$/\2/p" .env 2>/dev/null | tail -n 1)
 
-.PHONY: fmt lint test test-db-clean vuln build run db-up db-down generate migrate-diff migrate-apply
+.PHONY: fmt lint test test-db-clean vuln build image run db-up db-down generate check-generated \
+	migrate-diff migrate-apply
 
 fmt:
 	$(TOOL) golangci-lint fmt ./...
@@ -36,6 +37,13 @@ vuln:
 build: lint
 	go build -o app ./cmd/api
 
+IMAGE ?= go-template
+
+# The app image, and the image that applies migrations (see Dockerfile).
+image:
+	docker build --build-arg VERSION=$$(git describe --always --dirty) -t $(IMAGE) .
+	docker build --target migrate -t $(IMAGE)-migrate .
+
 run:
 	go run ./cmd/api
 
@@ -48,6 +56,18 @@ db-down:
 # Regenerate internal/db from db/queries and db/schema.sql.
 generate:
 	$(TOOL) sqlc generate
+
+# Fails if a generated file is out of date: internal/db (sqlc), atlas.sum, migrations that don't
+# build db/schema.sql, or an untidy go.mod. Needs Docker. Atlas's schema diff exits 0 even when the
+# schemas differ, so its output is checked instead.
+check-generated:
+	$(TOOL) sqlc diff
+	atlas migrate validate --env local
+	@out=$$(atlas schema diff --env local --from file://db/migrations --to file://db/schema.sql 2>&1); \
+		echo "$$out" | grep -qx "Schemas are synced, no changes to be made." || { \
+		echo "$$out"; echo "db/schema.sql differs from db/migrations: make migrate-diff name=<what_changed>"; exit 1; }
+	go mod tidy -diff
+	cd tools && go mod tidy -diff
 
 # Write a migration for the difference between db/schema.sql and db/migrations (needs Docker).
 migrate-diff:

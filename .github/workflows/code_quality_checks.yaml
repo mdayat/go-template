@@ -29,13 +29,8 @@ jobs:
           go mod verify
           go mod verify -modfile=tools/go.mod
 
-      - name: Lint
-        run: make lint
-
-      - name: Check for known vulnerabilities
-        run: make vuln
-
-      # Tests apply db/migrations with Atlas. Pinned by version and checksum, Community edition.
+      # Pinned by version and checksum, Community edition. Keep the version equal to the migrate
+      # image's in the Dockerfile.
       - name: Install Atlas
         env:
           ATLAS_VERSION: v1.3.0
@@ -46,7 +41,20 @@ jobs:
           sudo install atlas /usr/local/bin/atlas
           atlas version
 
+      - name: Check generated files are up to date
+        run: make check-generated
+
+      - name: Lint
+        run: make lint
+
+      - name: Check for known vulnerabilities
+        run: make vuln
+
       - name: Test
         env:
           TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
         run: make test
+
+      # Built only to prove the Dockerfile works; nothing is pushed.
+      - name: Build images
+        run: make image

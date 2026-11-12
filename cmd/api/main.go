@@ -29,6 +29,12 @@ const (
 	shutdownTimeout = 15 * time.Second
 )
 
+// buildVersion is set at build time with -ldflags "-X main.buildVersion=...", for builds that can't
+// see .git (the Docker build).
+//
+//nolint:gochecknoglobals // -X can only set a package-level variable
+var buildVersion string
+
 func main() {
 	if err := run(); err != nil {
 		log.Error().Err(err).Msg("api stopped")
@@ -109,9 +115,12 @@ func setupLogger(cfg config.Config) {
 	zerolog.DefaultContextLogger = &log.Logger
 }
 
-// version is the git commit the binary was built from, with "-dirty" if it had uncommitted
-// changes. `go run` and builds outside a git checkout don't record one.
+// version is buildVersion if set, else the git commit the binary was built from, with "-dirty" if
+// it had uncommitted changes. `go run` and builds outside a git checkout don't record a commit.
 func version() string {
+	if buildVersion != "" {
+		return buildVersion
+	}
 	info, ok := debug.ReadBuildInfo()
 	if !ok {
 		return "unknown"

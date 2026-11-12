@@ -1,0 +1,8 @@
+# Only what the Dockerfile reads; everything else (.env, .git, local files) stays out of the build.
+*
+!go.mod
+!go.sum
+!cmd/
+!internal/
+!db/migrations/
+!deploy/atlas.hcl

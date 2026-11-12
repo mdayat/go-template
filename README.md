@@ -4,11 +4,14 @@ This repository serves as a template for speeding up project scaffolding for Go 
 
 ## Features
 
-- **Dockerfile**: Pre-configured Dockerfile for containerizing your Go application.
+- **Dockerfile**: Two images. The app: a static binary on a distroless base (no shell, non-root user,
+  no `.env`; settings come from the environment). `migrate`: applies `db/migrations` to
+  `DATABASE_URL`; run it once before starting a new app version. `make image` builds both.
 - **.golangci.yml**: Configuration for `golangci-lint`, which runs `revive`, `staticcheck` and other linters.
 - **tools/go.mod**: Pins `golangci-lint`, `sqlc` and `govulncheck`, run with `go tool -modfile=tools/go.mod`.
-- **Makefile**: `fmt`, `lint`, `test`, `test-db-clean`, `vuln`, `build`, `run`, `db-up`, `db-down`,
-  `generate`, `migrate-diff` and `migrate-apply`, all on the Go version in `go.mod`.
+- **Makefile**: `fmt`, `lint`, `test`, `test-db-clean`, `vuln`, `build`, `image`, `run`, `db-up`,
+  `db-down`, `generate`, `check-generated`, `migrate-diff` and `migrate-apply`, all on the Go version
+  in `go.mod`.
 - **Database**: `db/schema.sql` is the schema as it should be. [Atlas](https://atlasgo.io)
   (Community edition) writes migrations from it into `db/migrations`, and
   [sqlc](https://sqlc.dev) turns the queries in `db/queries` into typed Go in `internal/db`.
@@ -33,7 +36,8 @@ This repository serves as a template for speeding up project scaffolding for Go 
   JSON field and the rule.
 - **`internal/apperr`**: The kinds of expected failure (bad request, invalid, not found, conflict)
   services return, with a message safe to show callers. Any other error is a 500.
-- **GitHub Workflow**: Pre-configured GitHub Actions workflow for code quality checks.
+- **GitHub Workflow**: On every push and pull request: generated files up to date, lint,
+  vulnerabilities, tests on Postgres, and both images build.
 
 ## Getting Started
 
@@ -67,6 +71,9 @@ This repository serves as a template for speeding up project scaffolding for Go 
    make run
    ```
 
+   If another Postgres already uses port 5432, change `POSTGRES_PORT` and the port in
+   `DATABASE_URL` and `TEST_DATABASE_URL` in `.env`.
+
 ### Running tests
 
 `make test` starts Postgres and runs every test. Tests use `TEST_DATABASE_URL` from the
@@ -79,6 +86,5 @@ database is kept for a look; `make test-db-clean` drops them all.
 2. `make migrate-diff name=<what_changed>` writes the migration into `db/migrations`. Commit it with
    `atlas.sum`, which Atlas uses to detect edited or missing migration files.
 3. `make generate` updates `internal/db`; `make migrate-apply` applies the migration locally.
-
-   If another Postgres already uses port 5432, change `POSTGRES_PORT` and the port in
-   `DATABASE_URL` in `.env`.
+4. `make check-generated` (CI runs it too) fails if `internal/db`, `atlas.sum` or the migrations
+   don't match `db/schema.sql` and `db/queries`.
