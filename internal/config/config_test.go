@@ -11,13 +11,14 @@ import (
 func TestLoadReportsEveryProblemAtOnce(t *testing.T) {
 	t.Setenv("APP_ENV", "staging")
 	t.Setenv("DATABASE_URL", "")
+	t.Setenv("REDIS_URL", "")
 	t.Setenv("LOG_LEVEL", "loud")
 
 	_, err := Load()
 	if err == nil {
-		t.Fatal("Load() error = nil, want one naming APP_ENV, DATABASE_URL and LOG_LEVEL")
+		t.Fatal("Load() error = nil, want one naming APP_ENV, DATABASE_URL, REDIS_URL and LOG_LEVEL")
 	}
-	for _, name := range []string{"APP_ENV", "DATABASE_URL", "LOG_LEVEL"} {
+	for _, name := range []string{"APP_ENV", "DATABASE_URL", "REDIS_URL", "LOG_LEVEL"} {
 		if !strings.Contains(err.Error(), name) {
 			t.Errorf("Load() error = %q, want it to name %s", err, name)
 		}
@@ -45,6 +46,7 @@ func TestLoadAcceptsOnlyTheFiveLogLevels(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.logLevel, func(t *testing.T) {
 			t.Setenv("DATABASE_URL", "postgres://localhost/app")
+			t.Setenv("REDIS_URL", "redis://localhost:6379/0")
 			t.Setenv("LOG_LEVEL", tt.logLevel)
 
 			cfg, err := Load()

@@ -13,7 +13,6 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
-	"io/fs"
 	"net/url"
 	"os"
 	"os/exec"
@@ -26,7 +25,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/joho/godotenv"
+
+	"github.com/mdayat/go-template/internal/testenv"
 )
 
 const (
@@ -109,11 +109,11 @@ func Main(m *testing.M) {
 }
 
 func newServer() (*server, error) {
-	root, err := repoRoot()
+	root, err := testenv.RepoRoot()
 	if err != nil {
 		return nil, err
 	}
-	raw, err := databaseURL(root)
+	raw, err := testenv.Get(envURL)
 	if err != nil {
 		return nil, err
 	}
@@ -206,38 +206,6 @@ func localURL(raw string) (*url.URL, error) {
 		}
 	}
 	return u, nil
-}
-
-func databaseURL(root string) (string, error) {
-	if v := os.Getenv(envURL); v != "" {
-		return v, nil
-	}
-	env, err := godotenv.Read(filepath.Join(root, ".env"))
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return "", fmt.Errorf("read .env: %w", err)
-	}
-	if v := env[envURL]; v != "" {
-		return v, nil
-	}
-	return "", fmt.Errorf("%s is not set in the environment or .env (see .example.env)", envURL)
-}
-
-// repoRoot is the nearest directory holding go.mod, from the package being tested upward.
-func repoRoot() (string, error) {
-	dir, err := os.Getwd()
-	if err != nil {
-		return "", err
-	}
-	for {
-		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
-			return dir, nil
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return "", errors.New("go.mod not found above the test's directory")
-		}
-		dir = parent
-	}
 }
 
 func newName() string {

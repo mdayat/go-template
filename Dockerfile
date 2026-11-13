@@ -14,7 +14,7 @@ COPY internal/ internal/
 ARG VERSION=""
 # Static binary (no cgo), so the app image needs no C library.
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w -X main.buildVersion=${VERSION}" -o /out/api ./cmd/api
+    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w -X main.buildVersion=${VERSION}" -o /out/ ./cmd/api ./cmd/worker
 
 # Applies db/migrations to DATABASE_URL. Run it once before starting a new app version:
 #   docker run --rm -e DATABASE_URL=... <image>
@@ -27,7 +27,13 @@ COPY db/migrations/ migrations/
 USER 65532:65532
 CMD ["migrate", "apply", "--env", "deploy"]
 
-# The app. Last, so a plain `docker build` builds it. No shell or package manager, and a non-root
+# The worker: runs queued jobs and queues the scheduled ones. It serves no port; run as many as the
+# jobs need.
+FROM gcr.io/distroless/static-debian13:nonroot AS worker
+COPY --from=build /out/worker /worker
+ENTRYPOINT ["/worker"]
+
+# The API. Last, so a plain `docker build` builds it. No shell or package manager, and a non-root
 # user. Settings come from the environment; there is no .env in the image.
 FROM gcr.io/distroless/static-debian13:nonroot AS app
 COPY --from=build /out/api /api

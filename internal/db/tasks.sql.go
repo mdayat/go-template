@@ -137,6 +137,21 @@ func (q *Queries) ListTasksAfter(ctx context.Context, arg ListTasksAfterParams) 
 	return items, nil
 }
 
+const purgeDoneTasks = `-- name: PurgeDoneTasks :execrows
+DELETE FROM tasks
+WHERE done
+  AND updated_at < now() - $1::bigint * interval '1 day'
+`
+
+// Deletes tasks marked done whose last change is more than older_than_days ago.
+func (q *Queries) PurgeDoneTasks(ctx context.Context, olderThanDays int64) (int64, error) {
+	result, err := q.db.Exec(ctx, purgeDoneTasks, olderThanDays)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const updateTask = `-- name: UpdateTask :one
 UPDATE tasks
 SET title = COALESCE($1, title),

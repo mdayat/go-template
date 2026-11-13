@@ -8,8 +8,10 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 )
 
@@ -24,6 +26,8 @@ type testTask struct {
 	Done   bool              `json:"done"`
 	Weight float64           `json:"weight"`
 	Meta   map[string]string `json:"meta"`
+	Due    time.Time         `json:"due"`
+	Ref    uuid.UUID         `json:"ref"`
 }
 
 type testItem struct {
@@ -125,6 +129,8 @@ func TestDecodeRejectsBadBodies(t *testing.T) {
 		{"wrong type: number", "/tasks", "application/json", `{"name":"a","priority":1,"weight":"heavy"}`, 400, `field "weight" must be a number`},
 		{"wrong type: array", "/tasks", "application/json", `{"name":"a","priority":1,"tags":"x"}`, 400, `field "tags" must be an array`},
 		{"wrong type: object", "/tasks", "application/json", `{"name":"a","priority":1,"meta":[1]}`, 400, `field "meta" must be an object`},
+		{"wrong type: time", "/tasks", "application/json", `{"name":"a","priority":1,"due":5}`, 400, `field "due" must be a string`},
+		{"wrong type: UUID", "/tasks", "application/json", `{"name":"a","priority":1,"ref":5}`, 400, `field "ref" must be a string`},
 		{"wrong type inside a list", "/tasks", "application/json", `{"name":"a","priority":1,"items":[{"title":5}]}`, 400, `field "items[0].title" must be a string`},
 		{"unknown field", "/tasks", "application/json", `{"name":"a","priority":1,"colour":"red"}`, 400, `unknown field "colour"`},
 		{"two JSON values", "/tasks", "application/json", valid + valid, 400, "request body must hold a single JSON value"},

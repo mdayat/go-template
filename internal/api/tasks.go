@@ -10,8 +10,10 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/hibiken/asynq"
 
 	"github.com/mdayat/go-template/internal/apperr"
+	"github.com/mdayat/go-template/internal/jobs"
 	"github.com/mdayat/go-template/internal/task"
 )
 
@@ -19,6 +21,7 @@ import (
 // rules about what a valid task is live in the task service.
 type taskRoutes struct {
 	tasks   *task.Service
+	jobs    *asynq.Client
 	decoder *bodyDecoder
 }
 
@@ -28,6 +31,7 @@ func (tr taskRoutes) mount(r chi.Router) {
 	r.Get("/tasks/{id}", Handle(tr.get))
 	r.Patch("/tasks/{id}", Handle(tr.update))
 	r.Delete("/tasks/{id}", Handle(tr.delete))
+	r.Post("/task-purges", Handle(tr.purge))
 }
 
 type createTaskRequest struct {
@@ -38,6 +42,10 @@ type createTaskRequest struct {
 type updateTaskRequest struct {
 	Title *string `json:"title"`
 	Done  *bool   `json:"done"`
+}
+
+type purgeTasksRequest struct {
+	OlderThanDays *int `json:"older_than_days" validate:"required"`
 }
 
 type taskResponse struct {
@@ -141,6 +149,30 @@ func (tr taskRoutes) delete(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	w.WriteHeader(http.StatusNoContent)
+	return nil
+}
+
+// purge queues a job that deletes the tasks marked done more than older_than_days ago. It only
+// queues: an endpoint that also wrote rows could save them and then fail to queue the job.
+func (tr taskRoutes) purge(w http.ResponseWriter, r *http.Request) error {
+	var req purgeTasksRequest
+	if err := tr.decoder.decode(w, r, &req); err != nil {
+		return err
+	}
+	// Checked here as well as in the job, so the caller hears about a bad age instead of the job
+	// failing later where nobody sees it.
+	if err := task.CheckPurgeAge(*req.OlderThanDays); err != nil {
+		return err
+	}
+	job, err := jobs.NewPurgeDoneTasks(*req.OlderThanDays)
+	if err != nil {
+		return err
+	}
+	info, err := tr.jobs.EnqueueContext(r.Context(), job)
+	if err != nil {
+		return fmt.Errorf("queue %s: %w", job.Type(), err)
+	}
+	writeJSON(w, http.StatusAccepted, "application/json", jobResponse{JobID: info.ID})
 	return nil
 }
 

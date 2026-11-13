@@ -24,6 +24,8 @@ const (
 	MaxTitleLength = 200
 	// MaxPageSize is the most tasks one List call returns.
 	MaxPageSize = 100
+	// MaxPurgeAgeDays is the oldest age PurgeDone accepts, about ten years.
+	MaxPurgeAgeDays = 3650
 
 	// The constraint behind a duplicate title, from db/schema.sql.
 	titleUniqueConstraint = "tasks_title_key"
@@ -156,6 +158,30 @@ func (s *Service) Delete(ctx context.Context, id uuid.UUID) error {
 	}
 	if deleted == 0 {
 		return fmt.Errorf("delete task %s: %w", id, apperr.NotFound("task not found"))
+	}
+	return nil
+}
+
+// PurgeDone deletes the tasks marked done whose last change is more than olderThanDays days ago,
+// and returns how many it deleted. Running it again deletes nothing more, so a repeated run is safe.
+func (s *Service) PurgeDone(ctx context.Context, olderThanDays int) (int64, error) {
+	if err := CheckPurgeAge(olderThanDays); err != nil {
+		return 0, err
+	}
+	deleted, err := s.queries.PurgeDoneTasks(ctx, int64(olderThanDays))
+	if err != nil {
+		return 0, fmt.Errorf("purge tasks done over %d days ago: %w", olderThanDays, err)
+	}
+	return deleted, nil
+}
+
+// CheckPurgeAge reports whether olderThanDays is an age PurgeDone accepts. The API checks it before
+// queueing a purge, so the caller hears about a bad age instead of the job failing later.
+func CheckPurgeAge(olderThanDays int) error {
+	if olderThanDays < 1 || olderThanDays > MaxPurgeAgeDays {
+		return apperr.Invalid("the age is out of range", apperr.FieldError{
+			Field: "older_than_days", Rule: "range", Message: fmt.Sprintf("must be from 1 to %d", MaxPurgeAgeDays),
+		})
 	}
 	return nil
 }

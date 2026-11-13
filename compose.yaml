@@ -16,5 +16,20 @@ services:
       timeout: 5s
       retries: 15
 
+  # The job queue. Valkey is an open-source (BSD) fork of Redis; asynq and go-redis treat it as Redis.
+  valkey:
+    image: valkey/valkey:8-alpine
+    ports:
+      # VALKEY_PORT comes from .env; REDIS_URL and TEST_REDIS_URL must use the same port.
+      - "${VALKEY_PORT:-6379}:6379"
+    volumes:
+      - valkey-data:/data
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+
 volumes:
   postgres-data:
+  valkey-data:

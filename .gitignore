@@ -1,4 +1,5 @@
 *.env
 !.example*.env
 .DS_Store
-/app
+/api
+/worker

@@ -14,6 +14,7 @@ import (
 
 	"github.com/mdayat/go-template/internal/db"
 	"github.com/mdayat/go-template/internal/testdb"
+	"github.com/mdayat/go-template/internal/testqueue"
 )
 
 func TestMain(m *testing.M) {
@@ -24,11 +25,11 @@ func TestMain(m *testing.M) {
 }
 
 // testAPI returns the real router and every feature's service, built by NewServices as in the app,
-// on a database of the test's own. Every endpoint test uses it.
+// on a database of the test's own and the test job queue. Every endpoint test uses it.
 func testAPI(t *testing.T) (http.Handler, *pgxpool.Pool) {
 	t.Helper()
 	pool := testdb.New(t)
-	return NewRouter(zerolog.Nop(), NewServices(db.New(pool))), pool
+	return NewRouter(zerolog.Nop(), NewServices(db.New(pool), testqueue.New(t))), pool
 }
 
 // Helpers shared by every feature's endpoint tests live here, not in a feature's test file, so

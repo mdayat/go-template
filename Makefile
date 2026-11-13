@@ -16,8 +16,8 @@ HASH := \#
 export DATABASE_URL ?= $(shell sed -nE 's/^(export[[:space:]]+)?DATABASE_URL=//p' .env 2>/dev/null | tail -n 1 \
 	| sed -E -e "s/^\"([^\"]*)\".*/\1/;t" -e "s/^'([^']*)'.*/\1/;t" -e "s/[[:space:]]+$(HASH).*//" -e "s/[[:space:]]+$$//")
 
-.PHONY: fmt lint test test-db-clean vuln build rename image run db-up db-down generate check-generated \
-	migrate-diff migrate-apply
+.PHONY: fmt lint test test-db-clean vuln build rename image run run-worker db-up db-down generate \
+	check-generated migrate-diff migrate-apply
 
 fmt:
 	$(TOOL) golangci-lint fmt ./...
@@ -25,7 +25,8 @@ fmt:
 lint:
 	$(TOOL) golangci-lint run ./...
 
-# Tests get their own databases on the compose Postgres (TEST_DATABASE_URL), so it must be up.
+# Tests get their own databases on the compose Postgres (TEST_DATABASE_URL) and queue jobs on the
+# compose Valkey (TEST_REDIS_URL), so both must be up.
 test: db-up
 	go test -race -shuffle=on ./...
 
@@ -39,7 +40,8 @@ vuln:
 	$(TOOL) govulncheck ./...
 
 build: lint
-	go build -o app ./cmd/api
+	go build -o api ./cmd/api
+	go build -o worker ./cmd/worker
 
 # Run once in a project copied from the template: make rename module=example.com/you/app
 # Renames the module in both go.mod files, Go imports and the linter's import grouping, and sets
@@ -59,13 +61,17 @@ rename:
 
 IMAGE ?= go-template
 
-# The app image, and the image that applies migrations (see Dockerfile).
+# The API image, the worker image, and the image that applies migrations (see Dockerfile).
 image:
 	docker build --build-arg VERSION=$$(git describe --always --dirty) -t $(IMAGE) .
+	docker build --build-arg VERSION=$$(git describe --always --dirty) --target worker -t $(IMAGE)-worker .
 	docker build --target migrate -t $(IMAGE)-migrate .
 
 run:
 	go run ./cmd/api
+
+run-worker:
+	go run ./cmd/worker
 
 db-up:
 	docker compose up -d --wait

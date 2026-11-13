@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"encoding"
 	"errors"
 	"fmt"
 	"io"
@@ -119,6 +120,11 @@ func decodeError(err error) error {
 
 // jsonTypeName names t the way a JSON client thinks of it.
 func jsonTypeName(t reflect.Type) string {
+	// A type that reads itself from text (uuid.UUID, time.Time) is a string in JSON, whatever Go
+	// type it is underneath (uuid.UUID is an array).
+	if reflect.PointerTo(t).Implements(reflect.TypeFor[encoding.TextUnmarshaler]()) {
+		return "a string"
+	}
 	switch t.Kind() {
 	case reflect.String:
 		return "a string"

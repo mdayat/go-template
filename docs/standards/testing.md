@@ -8,7 +8,8 @@ coverage number: covered lines can still be wrong, and a test that can't fail pr
 - **Through the real entry point, against a real database.** An endpoint test sends a request to
   the real router with the real services on a real Postgres (`testAPI` in
   `internal/api/main_test.go` builds them), then checks two things: **the reply and the rows**.
-  Example: `internal/api/tasks_test.go`.
+  Example: `internal/api/tasks_test.go`. A job test runs the job through the real handlers
+  (`testWorker` in `internal/worker/main_test.go`) and checks **the error and the rows**.
 - **Don't mock our own code.** A mock of our own service tests the mock. Fake only what we can't
   run locally: a payment provider, an email service, another company's API.
 - **Every success and every error path** a caller can reach: each status code an endpoint can
@@ -32,6 +33,15 @@ creates the rows it needs.
   test-db-clean` drops them.
 - `TEST_DATABASE_URL` must point at a local Postgres (`.example.env`); anything else is refused.
   If it's unset, tests fail rather than skip: a skipped test looks like a passing one.
+
+## The job queue in tests
+
+Tests that queue jobs use a real Valkey, through `internal/testqueue`: `testqueue.New(t)` connects
+to `TEST_REDIS_URL`, which must be a local Valkey and a database other than 0, the one the app
+uses, so a worker running on your machine never picks up a test's job. Tests share that database,
+so each one finds its own job by ID and deletes it: `testqueue.Take(t, client, jobs.Queue, id)`.
+Like `TEST_DATABASE_URL`, an unset or refused `TEST_REDIS_URL` fails the tests. Job handlers
+themselves don't need Valkey; see [worker.md](worker.md#tests).
 
 ## Style
 
@@ -66,7 +76,7 @@ that passes either way is deleted or fixed.
 ## Running
 
 ```sh
-make test   # starts Postgres, then go test -race -shuffle=on ./...
+make test   # starts Postgres and Valkey, then go test -race -shuffle=on ./...
 ```
 
 `-race` finds data races; `-shuffle=on` runs tests in random order, so a test that depends on

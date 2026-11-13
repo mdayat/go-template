@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -14,9 +15,14 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/redis/go-redis/v9"
+	"github.com/rs/zerolog"
 
 	"github.com/mdayat/go-template/internal/db"
+	"github.com/mdayat/go-template/internal/jobs"
 	"github.com/mdayat/go-template/internal/task"
+	"github.com/mdayat/go-template/internal/testdb"
+	"github.com/mdayat/go-template/internal/testqueue"
 )
 
 // seedTask inserts a task straight into the database, made createdAfter seedTime.
@@ -448,4 +454,87 @@ func sortedByTitle(a, b db.Task) []db.Task {
 		return []db.Task{b, a}
 	}
 	return []db.Task{a, b}
+}
+
+// The endpoint only queues the job, with the age the caller asked for; the worker deletes the rows.
+func TestPurgeTasksQueuesAJob(t *testing.T) {
+	t.Parallel()
+	router, pool := testAPI(t)
+	done := seedTask(t, pool, "done long ago", 0)
+	if _, err := pool.Exec(t.Context(), "UPDATE tasks SET done = true WHERE id = $1", done.ID); err != nil {
+		t.Fatalf("mark task done: %v", err)
+	}
+	before := tasksInDB(t, pool)
+
+	rec := send(t, router, http.MethodPost, "/task-purges", `{"older_than_days":45}`)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("POST /task-purges status = %d, want 202; body %s", rec.Code, rec.Body)
+	}
+	var reply jobResponse
+	decodeReply(t, rec, &reply)
+	job := testqueue.Take(t, testqueue.New(t), jobs.Queue, reply.JobID)
+	if job.Type != jobs.TypePurgeDoneTasks {
+		t.Errorf("queued job type = %q, want %q", job.Type, jobs.TypePurgeDoneTasks)
+	}
+	var payload jobs.PurgeDoneTasks
+	if err := json.Unmarshal(job.Payload, &payload); err != nil {
+		t.Fatalf("queued payload is not JSON: %q: %v", job.Payload, err)
+	}
+	if diff := cmp.Diff(jobs.PurgeDoneTasks{OlderThanDays: 45}, payload); diff != "" {
+		t.Errorf("queued payload mismatch (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff(before, tasksInDB(t, pool)); diff != "" {
+		t.Errorf("tasks in database after POST /task-purges mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestPurgeTasksRejects(t *testing.T) {
+	t.Parallel()
+	outOfRange := []fieldProblem{{Field: "older_than_days", Rule: "range", Message: "must be from 1 to 3650"}}
+
+	tests := []struct {
+		name       string
+		body       string
+		wantStatus int
+		wantDetail string
+		wantErrors []fieldProblem
+	}{
+		{
+			"no age", `{}`, 422, "request body is invalid",
+			[]fieldProblem{{Field: "older_than_days", Rule: "required", Message: "is required"}},
+		},
+		{"zero days", `{"older_than_days":0}`, 422, "the age is out of range", outOfRange},
+		{"negative days", `{"older_than_days":-1}`, 422, "the age is out of range", outOfRange},
+		{"over the limit", fmt.Sprintf(`{"older_than_days":%d}`, task.MaxPurgeAgeDays+1), 422, "the age is out of range", outOfRange},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			router, _ := testAPI(t)
+
+			rec := send(t, router, http.MethodPost, "/task-purges", tt.body)
+
+			want := problemReply{Status: tt.wantStatus, Detail: tt.wantDetail, Errors: tt.wantErrors}
+			if diff := cmp.Diff(want, readProblem(t, rec)); diff != "" {
+				t.Errorf("POST /task-purges reply mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+// A queue that's down is a 500 that tells the caller nothing about the queue.
+func TestPurgeTasksQueueDownIs500(t *testing.T) {
+	t.Parallel()
+	// Nothing listens on port 1.
+	down := redis.NewClient(&redis.Options{Addr: "localhost:1", MaxRetries: -1})
+	t.Cleanup(func() { _ = down.Close() })
+	router := NewRouter(zerolog.Nop(), NewServices(db.New(testdb.New(t)), down))
+
+	rec := send(t, router, http.MethodPost, "/task-purges", `{"older_than_days":30}`)
+
+	want := problemReply{Status: http.StatusInternalServerError, Detail: internalErrorDetail}
+	if diff := cmp.Diff(want, readProblem(t, rec)); diff != "" {
+		t.Errorf("POST /task-purges reply mismatch (-want +got):\n%s", diff)
+	}
 }

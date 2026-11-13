@@ -3,11 +3,12 @@
 Two rules hold everything up:
 
 1. **Services say what went wrong; entry points decide the response.** A service returns an
-   `apperr` kind; the HTTP layer turns the kind into a status code, and a worker would turn the
-   same kind into "retry" or "don't". Services never know about HTTP.
-2. **Each error is logged once, where the request ends.** Inner code wraps and returns; it never
-   logs an error it also returns. The HTTP layer puts the error on the request's one summary line
-   ([logging.md](logging.md)).
+   `apperr` kind; the HTTP layer turns the kind into a status code, and the worker turns the same
+   kind into "don't retry" ([worker.md](worker.md#errors-and-retries)). Services never know about
+   HTTP.
+2. **Each error is logged once, where the request or job ends.** Inner code wraps and returns; it
+   never logs an error it also returns. The HTTP layer puts the error on the request's one summary
+   line, the worker on the job's ([logging.md](logging.md)).
 
 ## Expected failures: `internal/apperr`
 

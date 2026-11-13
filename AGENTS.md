@@ -1,6 +1,7 @@
 # Instructions for AI coding agents
 
-A Go HTTP service on Postgres: chi router, pgx + sqlc, Atlas migrations, zerolog. The full rules,
+A Go HTTP service on Postgres with a background worker: chi router, pgx + sqlc, Atlas migrations,
+zerolog, asynq jobs on Valkey (Redis). The full rules,
 with reasons, are in `docs/standards/`; read the page for the area you're changing. The tasks
 feature is the working example of every rule: copy its shape.
 
@@ -8,6 +9,8 @@ feature is the working example of every rule: copy its shape.
 
 Run `make fmt lint test check-generated`. All four must pass; don't silence a linter with
 `//nolint` unless the line is truly a false positive, and then name the linter and the reason.
+`make test` starts Postgres and Valkey in Docker; tests read `TEST_DATABASE_URL` and
+`TEST_REDIS_URL` from the environment or `.env` (see `.example.env`).
 
 ## Where things go
 
@@ -17,6 +20,10 @@ Run `make fmt lint test check-generated`. All four must pass; don't silence a li
 | routes and handlers | `internal/api/<feature>.go`, mounted in `router.go` | `internal/api/tasks.go` |
 | wiring a new service | a field in `api.Services` and a line in `api.NewServices` (`router.go`); the app and the tests both build services there | `Tasks` |
 | endpoint tests | `internal/api/<feature>_test.go` | `internal/api/tasks_test.go` |
+| a background job: type name, payload, timeout, retries | `internal/jobs/<feature>.go` | `internal/jobs/tasks.go` |
+| job handlers | `internal/worker/<feature>.go`, mounted in `NewMux` (`worker.go`); services wired in `worker.Services` / `worker.NewServices` | `internal/worker/tasks.go` |
+| jobs on a timetable | the feature's schedule function in `internal/worker/<feature>.go`, called from `newScheduler` (`worker.go`) | `scheduleTaskJobs` |
+| job tests | `internal/worker/<feature>_test.go`, through `testWorker(t)` | `internal/worker/tasks_test.go` |
 | anything several features use | not in one feature's files (removing that feature would break the rest): test helpers in `internal/api/main_test.go`, other code in a shared file such as `router.go` | `send`, `readProblem`, `defaultPageSize` |
 | schema | `db/schema.sql`, then `make migrate-diff name=<what>` | `db/migrations/` |
 | queries | `db/queries/<feature>.sql`, then `make generate` | `db/queries/tasks.sql` |
@@ -45,6 +52,16 @@ Never edit `internal/db/` (generated) or a migration that's already merged (writ
 - Never log bodies, headers, query strings, secrets or personal data.
 - Never call `zerolog.Ctx(ctx).UpdateContext` where `ctx` may lack a request logger.
 
+**Jobs** ([worker.md](docs/standards/worker.md))
+- Every job may run twice (retries, a deploy mid-job, duplicates): make a second run change nothing,
+  and test that.
+- Payloads only gain fields; handlers accept payloads without the newest ones and ignore unknown
+  ones. IDs in payloads, never secrets or personal data.
+- Return an `apperr` kind for a failure a retry can't fix (it won't be retried); return `nil` when
+  "not found" just means there's nothing left to do. Set `asynq.Timeout` on every job.
+- An endpoint queues a job (202 with `job_id`) or writes rows, never both; check the input before
+  queueing.
+
 **Database** ([database.md](docs/standards/database.md))
 - Migrations must work with the app version still running: a `NOT NULL` column needs a default;
   rename or drop a column over several deploys; big-table indexes `CONCURRENTLY` with
@@ -55,7 +72,8 @@ Never edit `internal/db/` (generated) or a migration that's already merged (writ
 
 **Tests** ([testing.md](docs/standards/testing.md))
 - Endpoint tests use `testAPI(t)` (the real router and services on a database of the test's own);
-  check the reply **and** the rows. Don't build a router per feature.
+  check the reply **and** the rows. Don't build a router per feature. Job tests use `testWorker(t)`
+  the same way; a queued job is checked with `testqueue.Take`.
 - Don't mock our own code. Seed rows with SQL, not through the endpoint under test.
 - `t.Parallel()`, table tests, `cmp.Diff(want, got)`. Don't assert on library error text.
 - Break the code a test guards and confirm the test fails (the broken code must compile).

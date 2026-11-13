@@ -34,3 +34,9 @@ RETURNING *;
 -- name: DeleteTask :execrows
 DELETE FROM tasks
 WHERE id = $1;
+
+-- Deletes tasks marked done whose last change is more than older_than_days ago.
+-- name: PurgeDoneTasks :execrows
+DELETE FROM tasks
+WHERE done
+  AND updated_at < now() - sqlc.arg('older_than_days')::bigint * interval '1 day';

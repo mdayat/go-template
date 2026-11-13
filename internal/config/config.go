@@ -22,6 +22,7 @@ type Config struct {
 	AppEnv      string
 	HTTPAddr    string
 	DatabaseURL string
+	RedisURL    string
 	LogLevel    zerolog.Level
 }
 
@@ -36,6 +37,7 @@ func Load() (Config, error) {
 		AppEnv:      getenv("APP_ENV", EnvProduction),
 		HTTPAddr:    getenv("HTTP_ADDR", ":8080"),
 		DatabaseURL: os.Getenv("DATABASE_URL"),
+		RedisURL:    os.Getenv("REDIS_URL"),
 	}
 
 	var errs []error
@@ -44,6 +46,9 @@ func Load() (Config, error) {
 	}
 	if cfg.DatabaseURL == "" {
 		errs = append(errs, errors.New("DATABASE_URL is required"))
+	}
+	if cfg.RedisURL == "" {
+		errs = append(errs, errors.New("REDIS_URL is required"))
 	}
 
 	logLevel := getenv("LOG_LEVEL", "info")

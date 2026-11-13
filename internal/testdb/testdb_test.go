@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/mdayat/go-template/internal/testenv"
 )
 
 func TestMain(m *testing.M) { Main(m) }
@@ -13,9 +15,9 @@ func TestMain(m *testing.M) { Main(m) }
 // in db/migrations, so it holds whatever tables a project has.
 func checkEveryMigrationApplied(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
-	root, err := repoRoot()
+	root, err := testenv.RepoRoot()
 	if err != nil {
-		t.Fatalf("repoRoot() error = %v", err)
+		t.Fatalf("testenv.RepoRoot() error = %v", err)
 	}
 	files, err := filepath.Glob(filepath.Join(root, "db", "migrations", "*.sql"))
 	if err != nil {

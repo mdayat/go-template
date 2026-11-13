@@ -25,6 +25,9 @@ recognise them.
   stack. There is never a second line for the same failure.
 - A successful `/healthz` isn't logged: load balancers call it every few seconds.
 
+Jobs get the same: one `job completed` line per run, with the error on it
+([worker.md](worker.md#logging)).
+
 ## Levels
 
 | Level | When |
@@ -62,5 +65,7 @@ field sticks to every later line of the whole process. `recordError` in
 ## Outside requests
 
 Startup and shutdown use the global `log.Logger`: `api listening` (with `addr` and the build's
-`version`), `shutting down`, `api stopped cleanly`. Errors from Go's HTTP server itself (a failed
-accept, a handler writing headers twice) go through `api.ServerErrorLog` into the same JSON log.
+`version`) or `worker started`, `shutting down`, `api stopped cleanly` or `worker stopped cleanly`.
+Libraries' own messages go into the same JSON log, marked with `source`: Go's HTTP server (a
+failed accept, a handler writing headers twice) as `net/http`, the queue client as `go-redis`, and
+the job runner as `asynq`.
