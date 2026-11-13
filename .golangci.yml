@@ -41,8 +41,29 @@ linters:
     - tparallel
     # keeps //nolint honest
     - nolintlint
+    # libraries that may be replaced stay inside their one package
+    - depguard
 
   settings:
+    depguard:
+      rules:
+        json-library:
+          files:
+            - $all
+            - "!**/internal/json/*.go"
+          deny:
+            - pkg: github.com/goccy/go-json
+              desc: use internal/json, the one package that picks the JSON library
+        stdlib-json:
+          # Tests may use encoding/json: parsing replies with the standard library checks they're
+          # plain JSON whatever library wrote them.
+          files:
+            - $all
+            - "!$test"
+            - "!**/internal/json/*.go"
+          deny:
+            - pkg: encoding/json
+              desc: use internal/json, the one package that picks the JSON library
     # Without these it only checks database/sql and stays silent on pgx. (sqlclosecheck isn't
     # enabled: it doesn't catch unclosed pgx rows either way.)
     rowserrcheck:

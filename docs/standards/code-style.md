@@ -102,6 +102,12 @@ The rules for which error to return live in [errors.md](errors.md). Style only:
 - A `//nolint` names the linter and gives the reason: `//nolint:gosec // G204: no shell, our own
   arguments`. — lint (nolintlint)
 
+## Libraries
+
+- Use JSON only through `internal/json` (`Marshal`, `Unmarshal`, `DecodeStrict`), never go-json
+  or `encoding/json` directly, so the library can be replaced in that one package. Tests may use
+  `encoding/json` to check that replies are plain JSON. — lint (depguard)
+
 ## HTTP, database and tests
 
 These have their own pages: [http-api.md](http-api.md), [database.md](database.md),

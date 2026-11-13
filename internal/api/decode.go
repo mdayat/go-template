@@ -9,13 +9,12 @@ import (
 	"mime"
 	"net/http"
 	"reflect"
-	"strconv"
 	"strings"
 
 	"github.com/go-playground/validator/v10"
-	"github.com/goccy/go-json"
 
 	"github.com/mdayat/go-template/internal/apperr"
+	"github.com/mdayat/go-template/internal/json"
 )
 
 const maxBodyBytes = 1 << 20 // 1 MB
@@ -67,14 +66,8 @@ func (d *bodyDecoder) decode(w http.ResponseWriter, r *http.Request, dst any) er
 		return apperr.BadRequest("request body must be a JSON object")
 	}
 
-	dec := json.NewDecoder(bytes.NewReader(body))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(dst); err != nil {
+	if err := json.DecodeStrict(body, dst); err != nil {
 		return decodeError(err)
-	}
-	// One JSON value only: trailing data usually means a client bug.
-	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return apperr.BadRequest("request body must hold a single JSON value")
 	}
 
 	if err := d.validate.Struct(dst); err != nil {
@@ -95,25 +88,23 @@ func (d *bodyDecoder) decode(w http.ResponseWriter, r *http.Request, dst any) er
 func decodeError(err error) error {
 	var (
 		syntaxErr  *json.SyntaxError
-		typeErr    *json.UnmarshalTypeError
-		invalidErr *json.InvalidUnmarshalError
+		typeErr    *json.TypeError
+		unknownErr *json.UnknownFieldError
 	)
 	switch {
-	case errors.As(err, &invalidErr):
+	case errors.Is(err, json.ErrInvalidTarget):
 		return fmt.Errorf("decode request body: %w", err) // dst isn't a pointer: our bug
 	case errors.As(err, &syntaxErr):
 		return apperr.BadRequest(fmt.Sprintf("request body is not valid JSON (at byte %d)", syntaxErr.Offset))
-	case errors.Is(err, io.ErrUnexpectedEOF):
+	case errors.Is(err, json.ErrUnexpectedEnd):
 		return apperr.BadRequest("request body is not valid JSON (it ends too early)")
 	case errors.As(err, &typeErr):
-		return apperr.BadRequest(fmt.Sprintf("field %q must be %s", jsonPath(typeErr.Field), jsonTypeName(typeErr.Type)))
-	}
-	// Neither go-json nor encoding/json has a type for this; a test pins the text.
-	if name, ok := strings.CutPrefix(err.Error(), "json: unknown field "); ok {
-		if unquoted, err := strconv.Unquote(name); err == nil {
-			name = unquoted
-		}
-		return apperr.BadRequest(fmt.Sprintf("unknown field %q", name))
+		return apperr.BadRequest(fmt.Sprintf("field %q must be %s", typeErr.Field, jsonTypeName(typeErr.Type)))
+	case errors.As(err, &unknownErr):
+		return apperr.BadRequest(fmt.Sprintf("unknown field %q", unknownErr.Field))
+	case errors.Is(err, json.ErrTrailingData):
+		// Trailing data usually means a client bug.
+		return apperr.BadRequest("request body must hold a single JSON value")
 	}
 	return apperr.BadRequest("request body can't be read")
 }
@@ -142,23 +133,6 @@ func jsonTypeName(t reflect.Type) string {
 	default:
 		return "a valid value"
 	}
-}
-
-// jsonPath writes go-json's field path ("items.0.title") the way validation errors do
-// ("items[0].title"), so the 400 and 422 replies name a field the same way.
-func jsonPath(field string) string {
-	var b strings.Builder
-	for i, part := range strings.Split(field, ".") {
-		if _, err := strconv.Atoi(part); err == nil && i > 0 {
-			b.WriteString("[" + part + "]")
-			continue
-		}
-		if i > 0 {
-			b.WriteByte('.')
-		}
-		b.WriteString(part)
-	}
-	return b.String()
 }
 
 // fieldPath is the field's JSON path without the top struct's name: "items[0].name".

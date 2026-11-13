@@ -132,6 +132,7 @@ func TestDecodeRejectsBadBodies(t *testing.T) {
 		{"wrong type: time", "/tasks", "application/json", `{"name":"a","priority":1,"due":5}`, 400, `field "due" must be a string`},
 		{"wrong type: UUID", "/tasks", "application/json", `{"name":"a","priority":1,"ref":5}`, 400, `field "ref" must be a string`},
 		{"wrong type inside a list", "/tasks", "application/json", `{"name":"a","priority":1,"items":[{"title":5}]}`, 400, `field "items[0].title" must be a string`},
+		{"field that can't parse itself", "/tasks", "application/json", `{"name":"a","priority":1,"ref":"nope"}`, 400, "request body can't be read"},
 		{"unknown field", "/tasks", "application/json", `{"name":"a","priority":1,"colour":"red"}`, 400, `unknown field "colour"`},
 		{"two JSON values", "/tasks", "application/json", valid + valid, 400, "request body must hold a single JSON value"},
 		{"too large", "/tasks", "application/json", `{"name":"` + strings.Repeat("a", maxBodyBytes) + `"}`, 413, "request body must be at most 1 MB"},

@@ -4,8 +4,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/goccy/go-json"
 	"github.com/hibiken/asynq"
+
+	"github.com/mdayat/go-template/internal/json"
 )
 
 // TypePurgeDoneTasks deletes tasks marked done long ago; see task.Service.PurgeDone.

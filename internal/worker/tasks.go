@@ -5,12 +5,12 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/goccy/go-json"
 	"github.com/hibiken/asynq"
 	"github.com/rs/zerolog"
 
 	"github.com/mdayat/go-template/internal/apperr"
 	"github.com/mdayat/go-template/internal/jobs"
+	"github.com/mdayat/go-template/internal/json"
 	"github.com/mdayat/go-template/internal/task"
 )
 

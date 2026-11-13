@@ -30,6 +30,8 @@ Run `make fmt lint test check-generated`. All four must pass; don't silence a li
 | settings | `internal/config/config.go` and `.example.env` | `DATABASE_URL` |
 
 Never edit `internal/db/` (generated) or a migration that's already merged (write a new one).
+Use JSON only through `internal/json`, never go-json or `encoding/json` (tests may use
+`encoding/json`); lint refuses it.
 
 ## Rules
 

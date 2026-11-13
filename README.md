@@ -13,6 +13,7 @@ for your first feature, then remove it.
 | `cmd/worker` | the job runner and scheduler, with [asynq](https://github.com/hibiken/asynq) on Valkey (Redis) |
 | `internal/api` | routes, one JSON log line per request, [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) error replies, JSON body reading |
 | `internal/apperr` | the kinds of expected failure services return (bad request, invalid, not found, conflict) |
+| `internal/json` | the only package that imports a JSON library, so it can be replaced there alone |
 | `internal/task` | the example feature's rules |
 | `internal/jobs` | each background job's name, payload and options, shared by the API and the worker |
 | `internal/worker` | job handlers, one JSON log line per job, retries, the schedule |

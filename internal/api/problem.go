@@ -9,11 +9,11 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
-	"github.com/goccy/go-json"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/hlog"
 
 	"github.com/mdayat/go-template/internal/apperr"
+	"github.com/mdayat/go-template/internal/json"
 )
 
 // HandlerFunc is an HTTP handler that returns its failure instead of writing it.
@@ -130,8 +130,7 @@ func writeProblem(w http.ResponseWriter, r *http.Request, p problem) {
 	writeJSON(w, p.Status, "application/problem+json", p)
 }
 
-// writeJSON writes v as the reply. All JSON replies go through here, so the JSON library can be
-// swapped in one place.
+// writeJSON writes v as the reply. All JSON replies go through here, so each gets the same headers.
 func writeJSON(w http.ResponseWriter, status int, contentType string, v any) {
 	body, err := json.Marshal(v)
 	if err != nil {
