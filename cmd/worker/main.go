@@ -39,19 +39,24 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	cfg, err := config.Load()
+	// Add a secret manager's source after env, so the environment can still override it.
+	env, err := config.Env()
 	if err != nil {
 		return err
 	}
-	startup.SetupLogger(cfg)
+	cfg, err := loadSettings(env)
+	if err != nil {
+		return err
+	}
+	startup.SetupLogger(cfg.app)
 
-	pool, err := startup.ConnectDB(ctx, cfg.DatabaseURL)
+	pool, err := startup.ConnectDB(ctx, cfg.databaseURL)
 	if err != nil {
 		return err
 	}
 	defer pool.Close()
 
-	queue, err := startup.ConnectRedis(ctx, cfg.RedisURL)
+	queue, err := startup.ConnectRedis(ctx, cfg.redisURL)
 	if err != nil {
 		return err
 	}

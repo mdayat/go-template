@@ -161,5 +161,5 @@ make db-up        # Postgres and Valkey
 make run-worker   # the worker; `make run` for the API
 ```
 
-Deploy the worker image (`make image` builds `<name>-worker`) next to the API, with the same
-settings. It serves no port; run as many copies as the queue needs.
+Deploy the worker image (`make image` builds `<name>-worker`) next to the API, with the
+settings `cmd/worker/settings.go` reads. It serves no port; run as many copies as the queue needs.

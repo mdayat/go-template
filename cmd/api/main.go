@@ -45,19 +45,24 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	cfg, err := config.Load()
+	// Add a secret manager's source after env, so the environment can still override it.
+	env, err := config.Env()
 	if err != nil {
 		return err
 	}
-	startup.SetupLogger(cfg)
+	cfg, err := loadSettings(env)
+	if err != nil {
+		return err
+	}
+	startup.SetupLogger(cfg.app)
 
-	pool, err := startup.ConnectDB(ctx, cfg.DatabaseURL)
+	pool, err := startup.ConnectDB(ctx, cfg.databaseURL)
 	if err != nil {
 		return err
 	}
 	defer pool.Close()
 
-	queue, err := startup.ConnectRedis(ctx, cfg.RedisURL)
+	queue, err := startup.ConnectRedis(ctx, cfg.redisURL)
 	if err != nil {
 		return err
 	}
@@ -73,9 +78,9 @@ func run() error {
 	}
 
 	// Bind before logging, so "listening" is only logged once the port is ours.
-	listener, err := new(net.ListenConfig).Listen(ctx, "tcp", cfg.HTTPAddr)
+	listener, err := new(net.ListenConfig).Listen(ctx, "tcp", cfg.httpAddr)
 	if err != nil {
-		return fmt.Errorf("listen on %s: %w", cfg.HTTPAddr, err)
+		return fmt.Errorf("listen on %s: %w", cfg.httpAddr, err)
 	}
 	log.Info().Str("addr", listener.Addr().String()).Str("version", startup.Version(buildVersion)).Msg("api listening")
 

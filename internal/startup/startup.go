@@ -22,9 +22,9 @@ const connectTimeout = 5 * time.Second
 
 // SetupLogger sets the global logger's level and, in development, readable output, and sends
 // go-redis's own messages to it.
-func SetupLogger(cfg config.Config) {
-	zerolog.SetGlobalLevel(cfg.LogLevel)
-	if cfg.AppEnv == config.EnvDevelopment {
+func SetupLogger(app config.App) {
+	zerolog.SetGlobalLevel(app.LogLevel)
+	if app.Env == config.EnvDevelopment {
 		log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
 	}
 	// zerolog.Ctx on a context without a logger returns this one; the default drops every line.

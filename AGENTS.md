@@ -27,7 +27,7 @@ Run `make fmt lint test check-generated`. All four must pass; don't silence a li
 | anything several features use | not in one feature's files (removing that feature would break the rest): test helpers in `internal/api/main_test.go`, other code in a shared file such as `router.go` | `send`, `readProblem`, `defaultPageSize` |
 | schema | `db/schema.sql`, then `make migrate-diff name=<what>` | `db/migrations/` |
 | queries | `db/queries/<feature>.sql`, then `make generate` | `db/queries/tasks.sql` |
-| settings | `internal/config/config.go` and `.example.env` | `DATABASE_URL` |
+| settings | the program's `cmd/<name>/settings.go` (read through `internal/config`) and `.example.env` | `DATABASE_URL` |
 
 Never edit `internal/db/` (generated) or a migration that's already merged (write a new one).
 Use JSON only through `internal/json`, never go-json or `encoding/json` (tests may use
