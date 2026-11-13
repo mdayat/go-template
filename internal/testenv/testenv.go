@@ -23,8 +23,13 @@ func Get(name string) (string, error) {
 		return "", err
 	}
 	env, err := godotenv.Read(filepath.Join(root, ".env"))
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return "", fmt.Errorf("read .env: %w", err)
+	switch {
+	case err == nil, errors.Is(err, fs.ErrNotExist):
+	case errors.As(err, new(*fs.PathError)):
+		return "", fmt.Errorf("read .env: %w", err) // can't open or read it
+	default:
+		// The parser's message quotes values (secrets), as in config.Env.
+		return "", errors.New("read .env: a line can't be parsed (check quotes and names)")
 	}
 	if v := env[name]; v != "" {
 		return v, nil
