@@ -20,6 +20,7 @@ import (
 
 	"github.com/mdayat/go-template/internal/db"
 	"github.com/mdayat/go-template/internal/jobs"
+	"github.com/mdayat/go-template/internal/queue/valkey"
 	"github.com/mdayat/go-template/internal/task"
 	"github.com/mdayat/go-template/internal/testdb"
 	"github.com/mdayat/go-template/internal/testqueue"
@@ -473,8 +474,9 @@ func TestPurgeTasksQueuesAJob(t *testing.T) {
 	var reply jobResponse
 	decodeReply(t, rec, &reply)
 	job := testqueue.Take(t, testqueue.New(t), jobs.Queue, reply.JobID)
-	if job.Type != jobs.TypePurgeDoneTasks {
-		t.Errorf("queued job type = %q, want %q", job.Type, jobs.TypePurgeDoneTasks)
+	if job.Type != jobs.TypePurgeDoneTasks || job.Timeout != 5*time.Minute || job.MaxRetry != 5 {
+		t.Errorf("queued job = type %q, timeout %s, max retry %d; want %q, 5m0s, 5",
+			job.Type, job.Timeout, job.MaxRetry, jobs.TypePurgeDoneTasks)
 	}
 	var payload jobs.PurgeDoneTasks
 	if err := json.Unmarshal(job.Payload, &payload); err != nil {
@@ -526,7 +528,7 @@ func TestPurgeTasksQueueDownIs500(t *testing.T) {
 	// Nothing listens on port 1.
 	down := redis.NewClient(&redis.Options{Addr: "localhost:1", MaxRetries: -1})
 	t.Cleanup(func() { _ = down.Close() })
-	router := NewRouter(zerolog.Nop(), NewServices(db.New(testdb.New(t)), down))
+	router := NewRouter(zerolog.Nop(), NewServices(db.New(testdb.New(t)), valkey.NewEnqueuer(down)))
 
 	rec := send(t, router, http.MethodPost, "/task-purges", `{"older_than_days":30}`)
 

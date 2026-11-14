@@ -11,6 +11,7 @@ import (
 	"github.com/mdayat/go-template/internal/apperr"
 	"github.com/mdayat/go-template/internal/jobs"
 	"github.com/mdayat/go-template/internal/json"
+	"github.com/mdayat/go-template/internal/queue/valkey"
 	"github.com/mdayat/go-template/internal/task"
 )
 
@@ -23,9 +24,13 @@ func scheduleTaskJobs(scheduler *asynq.Scheduler) error {
 	if err != nil {
 		return err
 	}
+	daily, err := valkey.NewTask(purge)
+	if err != nil {
+		return err
+	}
 	// Midnight UTC.
-	if _, err := scheduler.Register("@daily", purge, asynq.Unique(time.Hour)); err != nil {
-		return fmt.Errorf("schedule %s: %w", purge.Type(), err)
+	if _, err := scheduler.Register("@daily", daily, asynq.Unique(time.Hour)); err != nil {
+		return fmt.Errorf("schedule %s: %w", purge.Type, err)
 	}
 	return nil
 }

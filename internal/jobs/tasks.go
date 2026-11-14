@@ -4,9 +4,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/hibiken/asynq"
-
 	"github.com/mdayat/go-template/internal/json"
+	"github.com/mdayat/go-template/internal/queue"
 )
 
 // TypePurgeDoneTasks deletes tasks marked done long ago; see task.Service.PurgeDone.
@@ -18,15 +17,17 @@ type PurgeDoneTasks struct {
 }
 
 // NewPurgeDoneTasks returns a job that deletes tasks marked done more than olderThanDays days ago.
-func NewPurgeDoneTasks(olderThanDays int) (*asynq.Task, error) {
+func NewPurgeDoneTasks(olderThanDays int) (queue.Job, error) {
 	payload, err := json.Marshal(PurgeDoneTasks{OlderThanDays: olderThanDays})
 	if err != nil {
-		return nil, fmt.Errorf("encode %s payload: %w", TypePurgeDoneTasks, err)
+		return queue.Job{}, fmt.Errorf("encode %s payload: %w", TypePurgeDoneTasks, err)
 	}
-	return asynq.NewTask(TypePurgeDoneTasks, payload,
-		asynq.Queue(Queue),
-		// asynq's default is 30 minutes; one delete takes seconds.
-		asynq.Timeout(5*time.Minute),
-		asynq.MaxRetry(5),
-	), nil
+	return queue.Job{
+		Type:    TypePurgeDoneTasks,
+		Queue:   Queue,
+		Payload: payload,
+		// One delete takes seconds.
+		Timeout:    5 * time.Minute,
+		MaxRetries: 5,
+	}, nil
 }

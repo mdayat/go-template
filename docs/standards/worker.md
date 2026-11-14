@@ -12,7 +12,7 @@ it every day at midnight UTC, and `POST /task-purges` queues it on demand.
 
 | What | Where |
 |---|---|
-| a job's type name, payload struct and options (timeout, retries) | `internal/jobs/<feature>.go` |
+| a job's type name, payload struct and options (timeout, retries) | `internal/jobs/<feature>.go`, built as a `queue.Job` |
 | the handler | `internal/worker/<feature>.go`, mounted in `NewMux` (`internal/worker/worker.go`) |
 | the rules it applies | the feature's service (`internal/task`), the same one the API calls |
 | wiring a new service | a field in `worker.Services` and a line in `worker.NewServices` |
@@ -28,7 +28,7 @@ asynq runs a job **at least once**, not exactly once. A job runs again when:
 
 - it was still running when the worker stopped (a deploy): after 8 s asynq puts it back in the
   queue;
-- it failed: it's retried, up to `MaxRetry` times, with growing delays (seconds at first, then
+- it failed: it's retried, up to `MaxRetries` times, with growing delays (seconds at first, then
   minutes, then hours);
 - something queued it twice (a user clicked twice, two workers' schedulers fired).
 
@@ -59,7 +59,7 @@ what happens:
 |---|---|
 | `nil` | done |
 | an `apperr` kind (bad payload, `NotFound`, `Invalid`) | failed for good, no retries: it would fail the same way every time |
-| any other error (database down, a timeout, another service's 503) | retried, up to the job's `MaxRetry`; then failed for good |
+| any other error (database down, a timeout, another service's 503) | retried, up to the job's `MaxRetries`; then failed for good |
 | a panic | caught, logged with its stack, retried like an error |
 
 A failed-for-good job is kept in Valkey ("archived") for asynq's tools to show; it doesn't run
@@ -77,8 +77,9 @@ if e, ok := errors.AsType[*apperr.Error](err); ok && e.Kind == apperr.KindNotFou
 
 ## Time limits and shutdown
 
-Every job sets `asynq.Timeout` in `internal/jobs` (asynq's default is 30 minutes). asynq keeps it
-in whole seconds, so anything under 1 s is dropped and the default applies. The handler's context
+Every job sets its `Timeout` in `internal/jobs`, in whole seconds. Queueing refuses anything else:
+asynq keeps whole seconds, cutting off the rest, and replaces a zero limit with its 30-minute
+default. The handler's context
 ends at the limit, so pass `ctx` to everything it calls, as in a request. A job past its limit
 counts as failed and is retried, whatever the handler then returns (an `apperr` kind included).
 
@@ -116,6 +117,11 @@ An endpoint that queues a job replies `202 Accepted` with the job's ID, `{"job_i
 the caller can find it in the worker's logs. Check the input before queueing (the same service
 check the job runs, or a read that the row exists), so the caller gets a 422 or 404 now instead of
 the job failing later where nobody sees it.
+
+Handlers queue through `queue.Enqueuer` (`Services.Jobs`), never asynq, go-redis or
+`internal/queue/valkey` directly: lint (depguard) refuses them in the API and the features.
+`cmd/api` picks the implementation. Moving to
+another queue is then a new implementation of `queue.Enqueuer`, not edits across the features.
 
 **An endpoint either queues a job or writes rows, not both.** Writing a row and then queueing can
 half-fail: the row is saved, the queue is down, the job is lost; the other order runs the job for

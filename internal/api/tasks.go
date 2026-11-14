@@ -10,10 +10,10 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
-	"github.com/hibiken/asynq"
 
 	"github.com/mdayat/go-template/internal/apperr"
 	"github.com/mdayat/go-template/internal/jobs"
+	"github.com/mdayat/go-template/internal/queue"
 	"github.com/mdayat/go-template/internal/task"
 )
 
@@ -21,7 +21,7 @@ import (
 // rules about what a valid task is live in the task service.
 type taskRoutes struct {
 	tasks   *task.Service
-	jobs    *asynq.Client
+	jobs    queue.Enqueuer
 	decoder *bodyDecoder
 }
 
@@ -168,11 +168,11 @@ func (tr taskRoutes) purge(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	info, err := tr.jobs.EnqueueContext(r.Context(), job)
+	id, err := tr.jobs.Enqueue(r.Context(), job)
 	if err != nil {
-		return fmt.Errorf("queue %s: %w", job.Type(), err)
+		return err
 	}
-	writeJSON(w, http.StatusAccepted, "application/json", jobResponse{JobID: info.ID})
+	writeJSON(w, http.StatusAccepted, "application/json", jobResponse{JobID: id})
 	return nil
 }
 

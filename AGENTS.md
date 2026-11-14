@@ -34,7 +34,10 @@ Never edit `internal/db/` (generated) or a migration that's already merged (writ
 Use JSON only through `internal/json`, never go-json or `encoding/json` (tests may use
 `encoding/json`); lint refuses it. Import pgx only in `internal/postgres`, `internal/startup`
 and `internal/testdb` (tests may use it to seed rows); lint refuses it elsewhere. A generated
-`pgtype` type gets an override in `sqlc.yaml` instead.
+`pgtype` type gets an override in `sqlc.yaml` instead. The API queues jobs through
+`queue.Enqueuer` (`internal/queue`), never asynq or go-redis; lint refuses them outside
+`internal/queue/valkey`, `internal/startup`, `internal/testqueue` and the worker, and
+`internal/queue/valkey` itself outside `cmd/` and the worker.
 
 ## Rules
 
@@ -63,7 +66,7 @@ and `internal/testdb` (tests may use it to seed rows); lint refuses it elsewhere
 - Payloads only gain fields; handlers accept payloads without the newest ones and ignore unknown
   ones. IDs in payloads, never secrets or personal data.
 - Return an `apperr` kind for a failure a retry can't fix (it won't be retried); return `nil` when
-  "not found" just means there's nothing left to do. Set `asynq.Timeout` on every job.
+  "not found" just means there's nothing left to do. Set `Timeout` on every job's `queue.Job`.
 - An endpoint queues a job (202 with `job_id`) or writes rows, never both; check the input before
   queueing.
 

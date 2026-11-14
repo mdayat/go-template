@@ -13,6 +13,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/mdayat/go-template/internal/db"
+	"github.com/mdayat/go-template/internal/queue/valkey"
 	"github.com/mdayat/go-template/internal/testdb"
 	"github.com/mdayat/go-template/internal/testqueue"
 )
@@ -29,7 +30,7 @@ func TestMain(m *testing.M) {
 func testAPI(t *testing.T) (http.Handler, *pgxpool.Pool) {
 	t.Helper()
 	pool := testdb.New(t)
-	return NewRouter(zerolog.Nop(), NewServices(db.New(pool), testqueue.New(t))), pool
+	return NewRouter(zerolog.Nop(), NewServices(db.New(pool), valkey.NewEnqueuer(testqueue.New(t)))), pool
 }
 
 // Helpers shared by every feature's endpoint tests live here, not in a feature's test file, so

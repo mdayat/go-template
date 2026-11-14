@@ -16,6 +16,7 @@ for your first feature, then remove it.
 | `internal/json` | the only package that imports a JSON library, so it can be replaced there alone |
 | `internal/task` | the example feature's rules, and their tests |
 | `internal/postgres` | recognises the Postgres driver's errors, so services don't import the driver |
+| `internal/queue` | what the code knows about the job queue (a job, queueing one), with the asynq implementation on Valkey in `internal/queue/valkey` |
 | `internal/jobs` | each background job's name, payload and options, shared by the API and the worker |
 | `internal/worker` | job handlers, one JSON log line per job, retries, the schedule |
 | `internal/startup` | what both commands do first: logger, Postgres and Valkey connections |

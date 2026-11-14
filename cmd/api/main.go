@@ -18,6 +18,7 @@ import (
 	"github.com/mdayat/go-template/internal/api"
 	"github.com/mdayat/go-template/internal/config"
 	"github.com/mdayat/go-template/internal/db"
+	"github.com/mdayat/go-template/internal/queue/valkey"
 	"github.com/mdayat/go-template/internal/startup"
 )
 
@@ -62,14 +63,14 @@ func run() error {
 	}
 	defer pool.Close()
 
-	queue, err := startup.ConnectRedis(ctx, cfg.redisURL)
+	redisClient, err := startup.ConnectRedis(ctx, cfg.redisURL)
 	if err != nil {
 		return err
 	}
-	defer queue.Close()
+	defer redisClient.Close()
 
 	server := &http.Server{
-		Handler:           api.NewRouter(log.Logger, api.NewServices(db.New(pool), queue)),
+		Handler:           api.NewRouter(log.Logger, api.NewServices(db.New(pool), valkey.NewEnqueuer(redisClient))),
 		ErrorLog:          api.ServerErrorLog(log.Logger),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,

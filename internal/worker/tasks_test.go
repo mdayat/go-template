@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/mdayat/go-template/internal/jobs"
+	"github.com/mdayat/go-template/internal/queue/valkey"
 )
 
 // seedTask inserts a task last changed age ago.
@@ -44,7 +45,11 @@ func purgeJob(t *testing.T, olderThanDays int) *asynq.Task {
 	if err != nil {
 		t.Fatalf("NewPurgeDoneTasks(%d) error = %v", olderThanDays, err)
 	}
-	return job
+	task, err := valkey.NewTask(job)
+	if err != nil {
+		t.Fatalf("NewTask(%+v) error = %v", job, err)
+	}
+	return task
 }
 
 // Deletes only tasks that are done and older than the age, and a second run changes nothing: asynq

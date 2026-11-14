@@ -7,5 +7,6 @@
 // a handler accepts a payload without the newest ones.
 package jobs
 
-// Queue is the queue every job goes to and the worker reads.
+// Queue is the queue every job goes to and the worker reads. A job that needs its own (urgent
+// work that mustn't wait behind slow jobs) gets a constant here, and the worker reads both.
 const Queue = "default"
