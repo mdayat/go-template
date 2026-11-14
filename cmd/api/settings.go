@@ -7,7 +7,9 @@ type settings struct {
 	app         config.App
 	httpAddr    string
 	databaseURL string
-	redisURL    string // the job queue
+	// remove:worker
+	redisURL string // the job queue
+	// remove:end
 }
 
 // loadSettings reads the API's settings from sources, the first winning, and reports every missing
@@ -18,7 +20,9 @@ func loadSettings(sources ...config.Source) (settings, error) {
 		app:         r.App(),
 		httpAddr:    r.String("HTTP_ADDR", ":8080"),
 		databaseURL: r.Required("DATABASE_URL"),
-		redisURL:    r.Required("REDIS_URL"),
+		// remove:worker
+		redisURL: r.Required("REDIS_URL"),
+		// remove:end
 	}
 	if err := r.Err(); err != nil {
 		return settings{}, err

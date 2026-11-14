@@ -456,6 +456,7 @@ func sortedByTitle(a, b db.Task) []db.Task {
 	return []db.Task{a, b}
 }
 
+// remove:worker
 // The endpoint only queues the job, with the age the caller asked for; the worker deletes the rows.
 func TestPurgeTasksQueuesAJob(t *testing.T) {
 	t.Parallel()
@@ -537,3 +538,5 @@ func TestPurgeTasksQueueDownIs500(t *testing.T) {
 		t.Errorf("POST /task-purges reply mismatch (-want +got):\n%s", diff)
 	}
 }
+
+// remove:end

@@ -171,8 +171,8 @@ func (s *Service) PurgeDone(ctx context.Context, olderThanDays int) (int64, erro
 	return deleted, nil
 }
 
-// CheckPurgeAge reports whether olderThanDays is an age PurgeDone accepts. The API checks it before
-// queueing a purge, so the caller hears about a bad age instead of the job failing later.
+// CheckPurgeAge reports whether olderThanDays is an age PurgeDone accepts. Code that queues a purge
+// checks it first, so the caller hears about a bad age instead of the job failing later.
 func CheckPurgeAge(olderThanDays int) error {
 	if olderThanDays < 1 || olderThanDays > MaxPurgeAgeDays {
 		return apperr.Invalid("the age is out of range", apperr.FieldError{

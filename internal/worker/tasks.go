@@ -30,7 +30,8 @@ func taskSchedules() ([]queue.Schedule, error) {
 	}, nil
 }
 
-// taskJobs runs the tasks feature's jobs. The rules live in the task service, as for the API.
+// taskJobs runs the tasks feature's jobs. The rules live in the task service, shared with every
+// other entry point.
 type taskJobs struct {
 	tasks        *task.Service
 	purgeReports EventSender
@@ -50,7 +51,7 @@ func (tj taskJobs) mount(mux *queue.Mux) {
 
 func (tj taskJobs) purgeDone(ctx context.Context, raw []byte) error {
 	var payload jobs.PurgeDoneTasks
-	// Unknown fields are allowed: a newer API may queue a payload with fields this version lacks.
+	// Unknown fields are allowed: a newer version may queue a payload with fields this one lacks.
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		return fmt.Errorf("decode payload: %w: %w", err, apperr.BadRequest("the payload is not valid JSON"))
 	}

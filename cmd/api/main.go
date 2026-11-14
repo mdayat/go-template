@@ -63,14 +63,22 @@ func run() error {
 	}
 	defer pool.Close()
 
+	// remove:worker
 	redisClient, err := startup.ConnectRedis(ctx, cfg.redisURL)
 	if err != nil {
 		return err
 	}
 	defer redisClient.Close()
 
+	// remove:end
+	services := api.NewServices(
+		db.New(pool),
+		// remove:worker
+		valkey.NewEnqueuer(redisClient),
+		// remove:end
+	)
 	server := &http.Server{
-		Handler:           api.NewRouter(log.Logger, api.NewServices(db.New(pool), valkey.NewEnqueuer(redisClient))),
+		Handler:           api.NewRouter(log.Logger, services),
 		ErrorLog:          api.ServerErrorLog(log.Logger),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,

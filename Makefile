@@ -1,4 +1,6 @@
+# remove:api
 .DEFAULT_GOAL := run
+# remove:end
 
 # Run every command on the exact Go version in go.mod (the one CI uses), even when a newer Go is
 # installed, so code can't quietly depend on something only the newer version has.
@@ -16,7 +18,7 @@ HASH := \#
 export DATABASE_URL ?= $(shell sed -nE 's/^(export[[:space:]]+)?DATABASE_URL=//p' .env 2>/dev/null | tail -n 1 \
 	| sed -E -e "s/^\"([^\"]*)\".*/\1/;t" -e "s/^'([^']*)'.*/\1/;t" -e "s/[[:space:]]+$(HASH).*//" -e "s/[[:space:]]+$$//")
 
-.PHONY: fmt lint test test-db-clean vuln build rename image run run-worker db-up db-down generate \
+.PHONY: fmt lint test test-db-clean vuln build rename image image-migrate db-up db-down generate \
 	check-generated migrate-diff migrate-apply
 
 fmt:
@@ -25,8 +27,7 @@ fmt:
 lint:
 	$(TOOL) golangci-lint run ./...
 
-# Tests get their own databases on the compose Postgres (TEST_DATABASE_URL) and queue jobs on the
-# compose Valkey (TEST_REDIS_URL), so both must be up.
+# Tests use the compose services (TEST_* in .example.env), so they must be up.
 test: db-up
 	go test -race -shuffle=on ./...
 
@@ -39,9 +40,9 @@ test-db-clean:
 vuln:
 	$(TOOL) govulncheck ./...
 
+# One binary per program in cmd/, named after its folder (none when cmd/ is empty).
 build: lint
-	go build -o api ./cmd/api
-	go build -o worker ./cmd/worker
+	@if ls cmd/*/main.go >/dev/null 2>&1; then go build -o . ./cmd/...; else echo "no programs in cmd/"; fi
 
 # Run once in a project copied from the template: make rename module=example.com/you/app
 # Renames the module in both go.mod files, Go imports and the linter's import grouping, and sets
@@ -59,19 +60,44 @@ rename:
 		$(TOOL) golangci-lint fmt ./... && \
 		echo "Renamed $$old to $(module)."
 
+# remove:markers
+# Run in a project copied from the template, to take out a part it doesn't need: make remove
+# what=api|worker. Keeping both: what=markers drops the remove: comments and this tool.
+.PHONY: remove
+remove:
+	@test -n "$(what)" || { echo "usage: make remove what=api|worker|markers"; exit 1; }
+	go run ./scripts/remove $(what)
+# remove:end
+
 IMAGE ?= go-template
 
-# The API image, the worker image, and the image that applies migrations (see Dockerfile).
-image:
-	docker build --build-arg VERSION=$$(git describe --always --dirty) -t $(IMAGE) .
-	docker build --build-arg VERSION=$$(git describe --always --dirty) --target worker -t $(IMAGE)-worker .
+# Every image (see Dockerfile): each program's, and the one that applies migrations.
+image: image-migrate
+
+image-migrate:
 	docker build --target migrate -t $(IMAGE)-migrate .
+
+# remove:api
+.PHONY: image-api run
+image: image-api
+
+image-api:
+	docker build --build-arg VERSION=$$(git describe --always --dirty) --target app -t $(IMAGE) .
 
 run:
 	go run ./cmd/api
+# remove:end
+
+# remove:worker
+.PHONY: image-worker run-worker
+image: image-worker
+
+image-worker:
+	docker build --build-arg VERSION=$$(git describe --always --dirty) --target worker -t $(IMAGE)-worker .
 
 run-worker:
 	go run ./cmd/worker
+# remove:end
 
 db-up:
 	docker compose up -d --wait

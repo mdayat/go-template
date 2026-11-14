@@ -16,13 +16,13 @@ func TestReaderReportsEveryProblemAtOnce(t *testing.T) {
 
 	r.App()
 	r.Required("DATABASE_URL")
-	r.Required("REDIS_URL")
+	r.Required("API_KEY")
 
 	err := r.Err()
 	if err == nil {
-		t.Fatal("Err() = nil, want one naming APP_ENV, DATABASE_URL, REDIS_URL and LOG_LEVEL")
+		t.Fatal("Err() = nil, want one naming APP_ENV, DATABASE_URL, API_KEY and LOG_LEVEL")
 	}
-	for _, name := range []string{"APP_ENV", "DATABASE_URL", "REDIS_URL", "LOG_LEVEL"} {
+	for _, name := range []string{"APP_ENV", "DATABASE_URL", "API_KEY", "LOG_LEVEL"} {
 		if !strings.Contains(err.Error(), name) {
 			t.Errorf("Err() = %q, want it to name %s", err, name)
 		}

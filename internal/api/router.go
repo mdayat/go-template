@@ -29,28 +29,39 @@ const (
 	defaultPageSize = 20
 )
 
+// remove:worker
 // jobResponse is the reply of every endpoint that queues a job (202 Accepted): the job's ID, for
 // finding it in the worker's logs.
 type jobResponse struct {
 	JobID string `json:"job_id"`
 }
 
-// Services holds what the routes call: one field per feature, and the job queue. A new feature adds
-// its field here and builds it in NewServices.
+// remove:end
+
+// Services holds what the routes call, one field per feature. A new feature adds its field here and
+// builds it in NewServices.
 type Services struct {
 	Tasks *task.Service
+	// remove:worker
 	// Jobs queues background jobs for the worker (cmd/worker).
 	Jobs queue.Enqueuer
+	// remove:end
 }
 
-// NewServices builds every feature's service on queries, and queues jobs through jobs. The app
-// (cmd/api) and the endpoint tests (testAPI) both get their services here, so a feature can't be
-// wired into one and forgotten in the other: its tests would pass while the app served it with a nil
-// service.
-func NewServices(queries *db.Queries, jobs queue.Enqueuer) Services {
+// NewServices builds every feature's service on queries. The app (cmd/api) and the endpoint tests
+// (testAPI) both get their services here, so a feature can't be wired into one and forgotten in the
+// other: its tests would pass while the app served it with a nil service.
+func NewServices(
+	queries *db.Queries,
+	// remove:worker
+	jobs queue.Enqueuer,
+	// remove:end
+) Services {
 	return Services{
 		Tasks: task.NewService(queries),
-		Jobs:  jobs,
+		// remove:worker
+		Jobs: jobs,
+		// remove:end
 	}
 }
 
@@ -59,7 +70,13 @@ func NewRouter(logger zerolog.Logger, services Services) *chi.Mux {
 	router := newBaseRouter(logger)
 	// One decoder for every feature: the validator caches what it learns about each type.
 	decoder := newBodyDecoder()
-	taskRoutes{tasks: services.Tasks, jobs: services.Jobs, decoder: decoder}.mount(router)
+	taskRoutes{
+		tasks: services.Tasks,
+		// remove:worker
+		jobs: services.Jobs,
+		// remove:end
+		decoder: decoder,
+	}.mount(router)
 	return router
 }
 

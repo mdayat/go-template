@@ -79,6 +79,7 @@ linters:
           deny:
             - pkg: github.com/jackc/pgx/v5
               desc: recognise database errors through internal/postgres; map pgtype types to Go types in sqlc.yaml
+        # remove:worker
         queue-library:
           # Tests may use them to read what was queued. startup opens the connection and testqueue
           # gives tests theirs.
@@ -104,6 +105,7 @@ linters:
           deny:
             - pkg: github.com/mdayat/go-template/internal/queue/valkey
               desc: use the internal/queue types passed in from cmd/
+        # remove:end
     forbidigo:
       analyze-types: true
       forbid:
@@ -159,6 +161,7 @@ linters:
         linters:
           - gosec
           - gochecknoglobals
+      # remove:api
       # G705 (cross-site scripting) on writeJSON: replies are always a JSON content type with
       # nosniff, never HTML. A rule, not a //nolint: G705 only fires while some handler writes
       # request data into a reply, and an unused //nolint fails the lint.
@@ -166,6 +169,7 @@ linters:
         linters:
           - gosec
         text: G705
+      # remove:end
 
 # Show every issue: by default a second issue on the same line, and issues past a per-linter
 # cap, are hidden.

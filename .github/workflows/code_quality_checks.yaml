@@ -15,9 +15,28 @@ permissions:
 
 jobs:
   check:
+    name: check (${{ matrix.shape }})
     runs-on: ubuntu-latest
     # A hung step (a test waiting forever) fails here instead of after GitHub's 6-hour default.
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - shape: as is
+            remove: ""
+          # remove:template
+          # Every shape a project can take with make remove must still pass every check, so
+          # removing a part can't leave a project that doesn't build or whose tests fail.
+          - shape: api only
+            remove: worker
+          - shape: worker only
+            remove: api
+          - shape: neither
+            remove: api worker
+          - shape: both, markers dropped
+            remove: markers
+          # remove:end
 
     steps:
       - name: Checkout
@@ -35,6 +54,14 @@ jobs:
         run: |
           go mod verify
           go mod verify -modfile=tools/go.mod
+
+      # remove:template
+      - name: Remove parts
+        if: matrix.remove != ''
+        env:
+          REMOVE: ${{ matrix.remove }}
+        run: for part in $REMOVE; do make remove what=$part; done
+      # remove:end
 
       # Pinned by version and checksum, Community edition. Keep the version equal to the migrate
       # image's in the Dockerfile.
@@ -60,7 +87,9 @@ jobs:
       - name: Test
         env:
           TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
+          # remove:worker
           TEST_REDIS_URL: redis://localhost:6379/1
+          # remove:end
         run: make test
 
       # Built only to prove the Dockerfile works; nothing is pushed.

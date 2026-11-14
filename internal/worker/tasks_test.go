@@ -50,7 +50,7 @@ func taskTitles(t *testing.T, pool *pgxpool.Pool) []string {
 	return titles
 }
 
-// purgePayload returns the payload the API and the scheduler queue for a purge.
+// purgePayload returns the payload queued for a purge.
 func purgePayload(t *testing.T, olderThanDays int) []byte {
 	t.Helper()
 	job, err := jobs.NewPurgeDoneTasks(olderThanDays)
@@ -61,7 +61,7 @@ func purgePayload(t *testing.T, olderThanDays int) []byte {
 }
 
 // Deletes only tasks that are done and older than the age, and a second run changes nothing: asynq
-// runs a job again when the worker stops mid-job, and the API can queue the same purge twice.
+// runs a job again when the worker stops mid-job, and the same purge can be queued twice.
 func TestPurgeDoneTasks(t *testing.T) {
 	t.Parallel()
 	mux, pool := testWorker(t)
@@ -80,7 +80,7 @@ func TestPurgeDoneTasks(t *testing.T) {
 	}
 }
 
-// A newer API may add payload fields this worker doesn't know yet; the job still runs.
+// A newer version may add payload fields this worker doesn't know yet; the job still runs.
 func TestPurgeDoneTasksAcceptsUnknownFields(t *testing.T) {
 	t.Parallel()
 	mux, pool := testWorker(t)
