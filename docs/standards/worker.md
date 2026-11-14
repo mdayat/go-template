@@ -154,7 +154,9 @@ The queue may change (SQS, say), so jobs rely only on what most queues offer:
 - **Time limits and `Unique` in whole seconds.**
 - **Retries per job, with the queue's own delays.** `MaxRetries` is set per job; SQS sets it per
   queue (`maxReceiveCount`), so an SQS implementation would read it from the job and give up
-  itself. The delay between tries is the queue's (asynq: seconds at first, then growing).
+  itself. The delay between tries is the queue's (asynq: seconds at first, then growing); a job
+  can't ask for "retry at" a time (a 429's `Retry-After`). Calls to outside services from a job:
+  [outside-calls.md](outside-calls.md).
 - **Timetables come from our code** (`queue.Schedule`), since not every queue has a scheduler.
 - **Whether a failed run is retried is the queue's rule**, not ours: asynq retries a run past its
   time limit whatever it returned, and puts back one cut off by shutdown without counting it.

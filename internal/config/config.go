@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net/url"
 	"os"
+	"strings"
 
 	"github.com/joho/godotenv"
 	"github.com/rs/zerolog"
@@ -97,6 +99,22 @@ func (r *Reader) Required(key string) string {
 	v := r.lookup(key)
 	if v == "" {
 		r.errs = append(r.errs, fmt.Errorf("%s is required", key))
+	}
+	return v
+}
+
+// OptionalHTTPURL returns the setting key, an absolute http:// or https:// URL, or "" if no source
+// has it. A value that isn't one is recorded as a problem; the problem doesn't quote it, since a
+// URL can hold a token.
+func (r *Reader) OptionalHTTPURL(key string) string {
+	v := r.lookup(key)
+	if v == "" {
+		return ""
+	}
+	u, err := url.Parse(v)
+	if err != nil || strings.TrimSpace(v) != v || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" {
+		r.errs = append(r.errs, fmt.Errorf("%s must be an http:// or https:// URL", key))
+		return ""
 	}
 	return v
 }

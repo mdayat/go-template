@@ -14,6 +14,8 @@ for your first feature, then remove it.
 | `internal/api` | routes, one JSON log line per request, [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) error replies, JSON body reading |
 | `internal/apperr` | the kinds of expected failure services return (bad request, invalid, not found, conflict) |
 | `internal/json` | the only package that imports a JSON library, so it can be replaced there alone |
+| `internal/httpclient` | HTTP clients for outside services, each call with a time limit, and which failures are worth retrying |
+| `internal/webhook` | reports events to a URL another system gave us (the example of calling an outside service) |
 | `internal/task` | the example feature's rules, and their tests |
 | `internal/postgres` | recognises the Postgres driver's errors, so services don't import the driver |
 | `internal/queue` | what the code knows about the job queue (a job, queueing it, handling it, a timetable), with the asynq implementation on Valkey in `internal/queue/valkey` |
@@ -25,7 +27,7 @@ for your first feature, then remove it.
 | `internal/testqueue` | a Valkey connection for tests, on a database the app never uses |
 | `internal/config` | reads settings from the environment and `.env` (or a secret manager you add), all problems reported at once; each program lists its own in `cmd/<name>/settings.go` |
 | `db/` | `schema.sql` (edit this), migrations written by [Atlas](https://atlasgo.io), queries |
-| `docs/standards/` | the rules, with reasons: [code style](docs/standards/code-style.md), [errors](docs/standards/errors.md), [logging](docs/standards/logging.md), [testing](docs/standards/testing.md), [HTTP API](docs/standards/http-api.md), [database](docs/standards/database.md), [jobs](docs/standards/worker.md) |
+| `docs/standards/` | the rules, with reasons: [code style](docs/standards/code-style.md), [errors](docs/standards/errors.md), [logging](docs/standards/logging.md), [testing](docs/standards/testing.md), [HTTP API](docs/standards/http-api.md), [database](docs/standards/database.md), [jobs](docs/standards/worker.md), [outside services](docs/standards/outside-calls.md) |
 | `AGENTS.md` | the same rules in short, for AI coding tools (`CLAUDE.md` loads it) |
 | `tools/go.mod` | pinned versions of golangci-lint, sqlc and govulncheck, kept out of the app's `go.mod` |
 | `Dockerfile` | the API and worker images, and a `migrate` image that applies migrations |
@@ -103,7 +105,8 @@ sqlc needs at least one query, so do it in one go with your first table:
 3. Replace tasks with your own feature in `internal/api/router.go` (the `Tasks` field of
    `api.Services`, its line in `NewServices`, the `taskRoutes{...}.mount(router)` line) and in
    `internal/worker/worker.go` (the same three in `worker.Services`, `NewServices` and `NewMux`,
-   and `taskSchedules` in `Schedules`).
+   `PurgeReports`, and `taskSchedules` in `Schedules`); drop the purge webhook from
+   `cmd/worker` (`purgeReports`, and `PURGE_WEBHOOK_URL` in `settings.go` and `.example.env`).
 4. Regenerate and check:
 
    ```sh

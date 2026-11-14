@@ -1,16 +1,28 @@
 package worker
 
 import (
+	"context"
 	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/rs/zerolog"
 
+	"github.com/mdayat/go-template/internal/db"
+	"github.com/mdayat/go-template/internal/httpclient"
 	"github.com/mdayat/go-template/internal/jobs"
 	"github.com/mdayat/go-template/internal/queue"
+	"github.com/mdayat/go-template/internal/testdb"
+	"github.com/mdayat/go-template/internal/webhook"
 )
 
 // seedTask inserts a task last changed age ago.
@@ -140,4 +152,129 @@ func TestSchedulesHoldTheDailyPurge(t *testing.T) {
 	if diff := cmp.Diff([]queue.Schedule{want}, got); diff != "" {
 		t.Errorf("purge schedules mismatch (-want +got):\n%s", diff)
 	}
+}
+
+// receivedReport is what the test webhook got in one request.
+type receivedReport struct {
+	Method         string
+	ContentType    string
+	IdempotencyKey string
+	Body           string
+}
+
+// testWebhook is an outside service the purge reports to, answering each request with the next
+// status in replies (the last one repeats), and recording what it got.
+func testWebhook(t *testing.T, replies ...int) (*httptest.Server, chan receivedReport) {
+	t.Helper()
+	received := make(chan receivedReport, 10)
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		received <- receivedReport{
+			Method: r.Method, ContentType: r.Header.Get("Content-Type"),
+			IdempotencyKey: r.Header.Get("Idempotency-Key"), Body: string(body),
+		}
+		w.WriteHeader(replies[min(int(calls.Add(1))-1, len(replies)-1)])
+	}))
+	t.Cleanup(server.Close)
+	return server, received
+}
+
+// The purge reports what's now true, with the job's ID as the idempotency key; when the webhook
+// fails, the job fails to be retried, and the retry reports the same thing with the same key.
+func TestPurgeDoneTasksReportsToTheWebhook(t *testing.T) {
+	t.Parallel()
+	server, received := testWebhook(t, http.StatusServiceUnavailable, http.StatusNoContent)
+	mux, pool := testWorkerReportingTo(t, server.URL, 5*time.Second)
+	seedTask(t, pool, "done 31 days ago", true, 31*day)
+	ctx := queue.WithRun(t.Context(), queue.Run{ID: "job-1", Type: jobs.TypePurgeDoneTasks, Attempt: 1, MaxAttempts: 6})
+
+	first := mux.Process(ctx, jobs.TypePurgeDoneTasks, purgePayload(t, 30))
+	second := mux.Process(ctx, jobs.TypePurgeDoneTasks, purgePayload(t, 30))
+
+	if first == nil || errors.Is(first, queue.ErrNoRetry) {
+		t.Errorf("first purge error = %v, want one that's retried: the webhook replied 503", first)
+	}
+	if second != nil {
+		t.Errorf("second purge error = %v, want nil", second)
+	}
+	want := receivedReport{
+		Method: http.MethodPost, ContentType: "application/json", IdempotencyKey: "job-1",
+		Body: `{"event":"tasks.purged","older_than_days":30}`,
+	}
+	for _, run := range []string{"first", "second"} {
+		if diff := cmp.Diff(want, <-received); diff != "" {
+			t.Errorf("%s report mismatch (-want +got):\n%s", run, diff)
+		}
+	}
+	if got := taskTitles(t, pool); len(got) != 0 {
+		t.Errorf("tasks after purge = %q, want none", got)
+	}
+}
+
+// A webhook failure decides whether the job is retried: a retry can't fix a 4xx other than 408 and
+// 429, so the job fails for good; anything else is retried.
+func TestPurgeDoneTasksWebhookFailures(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		reply       int
+		wantNoRetry bool
+	}{
+		{"bad request is not retried", http.StatusBadRequest, true},
+		{"gone is not retried", http.StatusGone, true},
+		{"too many requests is retried", http.StatusTooManyRequests, false},
+		{"server error is retried", http.StatusInternalServerError, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			server, _ := testWebhook(t, tt.reply)
+			mux, _ := testWorkerReportingTo(t, server.URL, 5*time.Second)
+
+			err := mux.Process(t.Context(), jobs.TypePurgeDoneTasks, purgePayload(t, 30))
+
+			if err == nil || errors.Is(err, queue.ErrNoRetry) != tt.wantNoRetry {
+				t.Errorf("purge error = %v, want an error with ErrNoRetry = %v", err, tt.wantNoRetry)
+			}
+		})
+	}
+}
+
+// A webhook that doesn't answer is cut off at the client's time limit, and the job is retried.
+func TestPurgeDoneTasksSlowWebhookIsCutOff(t *testing.T) {
+	t.Parallel()
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { <-release }))
+	t.Cleanup(server.Close)
+	t.Cleanup(func() { close(release) })
+	mux, _ := testWorkerReportingTo(t, server.URL, 200*time.Millisecond)
+
+	// A deadline of its own, so a client that lost its limit fails the timing check below instead of
+	// hanging the test.
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	t.Cleanup(cancel)
+
+	start := time.Now()
+	err := mux.Process(ctx, jobs.TypePurgeDoneTasks, purgePayload(t, 30))
+
+	if err == nil || errors.Is(err, queue.ErrNoRetry) {
+		t.Errorf("purge error = %v, want one that's retried", err)
+	}
+	if took := time.Since(start); took > 5*time.Second {
+		t.Errorf("purge took %s, want it cut off near the client's 200ms time limit", took)
+	}
+	if strings.Contains(fmt.Sprint(err), server.URL) {
+		t.Errorf("purge error = %v, want it without the webhook's URL", err)
+	}
+}
+
+// testWorkerReportingTo is testWorker with purges reported to the webhook at url, through a client
+// with timeout.
+func testWorkerReportingTo(t *testing.T, url string, timeout time.Duration) (*queue.Mux, *pgxpool.Pool) {
+	t.Helper()
+	pool := testdb.New(t)
+	reports := webhook.NewHTTPSender(httpclient.New(timeout), url)
+	return NewMux(zerolog.Nop(), NewServices(db.New(pool), reports)), pool
 }

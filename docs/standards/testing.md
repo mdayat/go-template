@@ -16,7 +16,8 @@ coverage number: covered lines can still be wrong, and a test that can't fail pr
   what the caller gets: one case per distinct reply or outcome, not every input that gives the
   same one.
 - **Don't mock our own code.** A mock of our own service tests the mock. Fake only what we can't
-  run locally: a payment provider, an email service, another company's API.
+  run locally: a payment provider, an email service, another company's API. Fake it with an
+  `httptest.Server` and check what we send to it ([outside-calls.md](outside-calls.md#tests)).
 - **Every success and every error path** a caller can reach: each reply an endpoint can return
   (status, detail, field errors), with the rows unchanged after a failure.
 - **Unit tests for tricky logic only** (parsing, calculations), as plain table tests; see

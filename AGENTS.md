@@ -70,6 +70,16 @@ itself outside `cmd/`.
 - An endpoint queues a job (202 with `job_id`) or writes rows, never both; check the input before
   queueing.
 
+**Outside services** ([outside-calls.md](docs/standards/outside-calls.md))
+- Behind a small interface defined where it's used, passed in from `cmd/` (`worker.EventSender`);
+  its implementation in its own package. HTTP clients come from `httpclient.New(timeout)`, never
+  `http.Get`/`http.DefaultClient` or a client you build yourself.
+- In a request, don't retry. In a job, return the error; mark it `queue.ErrNoRetry` when
+  `httpclient.Retryable` says a retry can't help.
+- The call comes last, after work that's safe to repeat; send what's true after a repeat, and the
+  job's ID as an idempotency key. Never put the URL, bodies or tokens in errors or logs.
+- Tests fake the service with `httptest.Server` and check what we sent.
+
 **Database** ([database.md](docs/standards/database.md))
 - Migrations must work with the app version still running: a `NOT NULL` column needs a default;
   rename or drop a column over several deploys; big-table indexes `CONCURRENTLY` with

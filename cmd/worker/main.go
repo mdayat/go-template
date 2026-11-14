@@ -14,9 +14,11 @@ import (
 
 	"github.com/mdayat/go-template/internal/config"
 	"github.com/mdayat/go-template/internal/db"
+	"github.com/mdayat/go-template/internal/httpclient"
 	"github.com/mdayat/go-template/internal/jobs"
 	"github.com/mdayat/go-template/internal/queue/valkey"
 	"github.com/mdayat/go-template/internal/startup"
+	"github.com/mdayat/go-template/internal/webhook"
 	"github.com/mdayat/go-template/internal/worker"
 )
 
@@ -25,6 +27,19 @@ import (
 //
 //nolint:gochecknoglobals // -X can only set a package-level variable
 var buildVersion string
+
+// webhookTimeout is how long one report may take, well inside the purge job's time limit.
+const webhookTimeout = 10 * time.Second
+
+// purgeReports returns where the purge reports to: the webhook at url, or nowhere if url is "".
+//
+//nolint:ireturn // one of two implementations, chosen by a setting
+func purgeReports(url string) worker.EventSender {
+	if url == "" {
+		return webhook.Discard{}
+	}
+	return webhook.NewHTTPSender(httpclient.New(webhookTimeout), url)
+}
 
 func main() {
 	if err := run(); err != nil {
@@ -72,7 +87,8 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	server, err := valkey.NewServer(redisClient, worker.NewMux(log.Logger, worker.NewServices(db.New(pool))), valkey.ServerOptions{
+	mux := worker.NewMux(log.Logger, worker.NewServices(db.New(pool), purgeReports(cfg.purgeWebhookURL)))
+	server, err := valkey.NewServer(redisClient, mux, valkey.ServerOptions{
 		Queues:          []string{jobs.Queue},
 		ShutdownTimeout: worker.ShutdownTimeout,
 		Logger:          log.Logger,

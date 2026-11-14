@@ -43,6 +43,8 @@ linters:
     - nolintlint
     # libraries that may be replaced stay inside their one package
     - depguard
+    # Go's default HTTP client, which has no time limit
+    - forbidigo
 
   settings:
     depguard:
@@ -102,6 +104,12 @@ linters:
           deny:
             - pkg: github.com/mdayat/go-template/internal/queue/valkey
               desc: use the internal/queue types passed in from cmd/
+    forbidigo:
+      analyze-types: true
+      forbid:
+        - pattern: ^http\.(Get|Head|Post|PostForm|DefaultClient|DefaultTransport)$
+          pkg: ^net/http$
+          msg: Go's default HTTP client has no time limit; use a client from httpclient.New
     # Without these it only checks database/sql and stays silent on pgx. (sqlclosecheck isn't
     # enabled: it doesn't catch unclosed pgx rows either way.)
     rowserrcheck:

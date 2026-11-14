@@ -190,3 +190,38 @@ func TestEnvReportsAnUnreadableDotEnv(t *testing.T) {
 		t.Errorf("Env() error = %v, want the file error", err)
 	}
 }
+
+func TestOptionalHTTPURL(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		value  string
+		want   string
+		wantOK bool
+	}{
+		{"", "", true},
+		{"https://hooks.example.com/t/abc", "https://hooks.example.com/t/abc", true},
+		{"http://localhost:9000/hook", "http://localhost:9000/hook", true},
+		{"ftp://example.com/hook", "", false},
+		{"hooks.example.com/hook", "", false},
+		{"https://", "", false},
+		{"https://exa mple.com/s3cret", "", false},
+		{"https://hooks.example.com/s3cret ", "", false},
+		{"https://:443/s3cret", "", false},
+		{"HTTPS://hooks.example.com/hook", "HTTPS://hooks.example.com/hook", true},
+		{"https://[::1]:9000/hook", "https://[::1]:9000/hook", true},
+	}
+	for _, tt := range tests {
+		r := NewReader(Map{"HOOK_URL": tt.value})
+
+		got := r.OptionalHTTPURL("HOOK_URL")
+		err := r.Err()
+
+		if got != tt.want || (err == nil) != tt.wantOK {
+			t.Errorf("OptionalHTTPURL(%q) = %q, error %v; want %q, ok = %v", tt.value, got, err, tt.want, tt.wantOK)
+		}
+		if err != nil && (strings.Contains(err.Error(), "s3cret") || !strings.Contains(err.Error(), "HOOK_URL")) {
+			t.Errorf("OptionalHTTPURL(%q) error = %q, want it to name HOOK_URL and quote no value", tt.value, err)
+		}
+	}
+}

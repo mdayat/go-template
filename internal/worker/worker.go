@@ -4,6 +4,7 @@
 package worker
 
 import (
+	"context"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -22,13 +23,24 @@ const ShutdownTimeout = 8 * time.Second
 // here and builds it in NewServices.
 type Services struct {
 	Tasks *task.Service
+	// PurgeReports is told when done tasks are purged (webhook.Discard when nobody listens).
+	PurgeReports EventSender
 }
 
-// NewServices builds every feature's service on queries. The worker (cmd/worker) and the job tests
-// both get their services here, so a feature can't be wired into one and forgotten in the other.
-func NewServices(queries *db.Queries) Services {
+// EventSender tells another system about an event: body is the event as JSON, and idempotencyKey
+// is the same on every try of one job, so the receiver can drop repeats. cmd/worker passes in
+// webhook.HTTPSender, or webhook.Discard when nobody listens.
+type EventSender interface {
+	Send(ctx context.Context, idempotencyKey string, body []byte) error
+}
+
+// NewServices builds every feature's service on queries, and reports purges to purgeReports. The
+// worker (cmd/worker) and the job tests both get their services here, so a feature can't be wired
+// into one and forgotten in the other.
+func NewServices(queries *db.Queries, purgeReports EventSender) Services {
 	return Services{
-		Tasks: task.NewService(queries),
+		Tasks:        task.NewService(queries),
+		PurgeReports: purgeReports,
 	}
 }
 
@@ -36,7 +48,7 @@ func NewServices(queries *db.Queries) Services {
 func NewMux(logger zerolog.Logger, services Services) *queue.Mux {
 	mux := queue.NewMux()
 	mux.Use(logJobs(logger))
-	taskJobs{tasks: services.Tasks}.mount(mux)
+	taskJobs{tasks: services.Tasks, purgeReports: services.PurgeReports}.mount(mux)
 	return mux
 }
 

@@ -113,6 +113,9 @@ The rules for which error to return live in [errors.md](errors.md). Style only:
 - Queue, handle and schedule jobs through `internal/queue`; `cmd/` picks the implementation. asynq
   and go-redis stay in `internal/queue/valkey`, `internal/startup` and `internal/testqueue`, and
   `internal/queue/valkey` in `cmd/`. — lint (depguard)
+- Call outside services with a client from `httpclient.New`, never `http.Get` or
+  `http.DefaultClient`, which have no time limit ([outside-calls.md](outside-calls.md)). — lint
+  (forbidigo)
 
 ## HTTP, database and tests
 
