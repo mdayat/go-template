@@ -41,8 +41,11 @@ Go's JSON reading (go-json and the standard library alike, with no setting to ch
 ## Replies
 
 - Success: JSON with snake_case keys, written with `writeJSON`. Times are RFC 3339 in UTC.
-  `201 Created` sets `Location`; `204 No Content` has no body; `202 Accepted` means a job was
-  queued and replies `{"job_id": "..."}` ([worker.md](worker.md#queueing-from-the-api)).
+  `201 Created` sets `Location`; `204 No Content` has no body.
+<!-- remove:worker -->
+- `202 Accepted` means a job was queued; it replies `{"job_id": "..."}`
+  ([worker.md](worker.md#queueing-from-the-api)).
+<!-- remove:end -->
 - Lists are objects, never bare arrays (`{"tasks": [...]}`), so fields can be added later without
   breaking clients. An empty list is `[]`, never `null`.
 - Errors: [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem details,
@@ -80,9 +83,14 @@ or the time limit can't stop it.
 On SIGTERM the server stops taking new requests and waits up to 15 s for running ones. Any still
 running then have their connections closed, which cancels their contexts, and the process exits.
 
-Work that takes long and doesn't need to finish before the reply (a report, sending email) is a
-background job instead ([worker.md](worker.md)). An endpoint that needs longer itself (a large
-upload) sets its own limits in that handler, not a higher limit for everyone:
+Work that takes long and doesn't need to finish before the reply (a report, sending email)
+doesn't belong in a request: it runs after the reply, outside the request.
+<!-- remove:worker -->
+It's a background job ([worker.md](worker.md)).
+<!-- remove:end -->
+
+An endpoint that needs longer itself (a large upload) sets its own limits in that handler, not a
+higher limit for everyone:
 `context.WithTimeout(context.WithoutCancel(r.Context()), d)` (a context made from `r.Context()`
 alone can't outlive its 8 s; this one also no longer stops when the client leaves), and
 `http.ResponseController` for the write deadline.

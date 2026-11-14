@@ -1,21 +1,27 @@
 # Calling outside services
 
-An outside service is anything we call over the network that isn't our database or queue: another
+An outside service is anything we call over the network that isn't our own: another
 company's API (payments, email, storage), a webhook, another team's service. These calls fail in
 ways our own code doesn't: they hang, they're down for a minute, they limit how often we call, and
 a call that timed out on our side may still have worked on theirs.
 
 The example is `internal/webhook`, which POSTs events to a URL another system gave us, with its
-tests; it stays whichever programs a project keeps. The worker's purge job uses it: after deleting
-old done tasks, it reports to `PURGE_WEBHOOK_URL` (optional).
+tests; it stays whichever programs a project keeps.
+<!-- remove:worker -->
+The worker's purge job uses it: after deleting old done tasks, it reports to `PURGE_WEBHOOK_URL`
+(optional).
+<!-- remove:end -->
 
 ## Behind an interface, passed in from `cmd/`
 
-Code that calls a service defines a small interface for what it needs, where it uses it
-(`worker.EventSender`), never taking the HTTP client or the provider's SDK. `cmd/` builds the
+Code that calls a service defines a small interface for what it needs, where it uses it, never
+taking the HTTP client or the provider's SDK. `cmd/` builds the
 implementation (`webhook.NewHTTPSender`) and passes it in, so moving to another provider is a new
 implementation, and a setting that's not filled in can pass one that does nothing
 (`webhook.Discard`).
+<!-- remove:worker -->
+The worker's is `worker.EventSender`, and `cmd/worker` picks its implementation.
+<!-- remove:end -->
 
 The implementation lives in a package of its own, named after what it does (`internal/webhook`,
 `internal/mailer`), not after the provider.
@@ -40,9 +46,9 @@ holds a request, a database connection or a job until the process restarts. So:
 
 ## Retries
 
-**In a request, don't retry.** The caller is waiting: return the error (the caller gets a 500, or a
-503 if the request ran out of time) and let the caller decide.
+**In a request, don't retry.** The caller is waiting: return the error and let the caller decide.
 
+<!-- remove:worker -->
 **In a job, don't retry inside the handler.** Return the error and the queue retries the whole job
 with growing delays. A failure a retry can't fix is marked `queue.ErrNoRetry`, so the job fails at
 once instead of using up its tries:
@@ -56,7 +62,9 @@ if err := tj.purgeReports.Send(ctx, run.ID, event); err != nil {
 }
 ```
 
-`httpclient.Retryable` sorts failures the same way for every service:
+<!-- remove:end -->
+`httpclient.Retryable` sorts failures the same way for every service, for whoever retries (a
+client, a queue):
 
 | Failure | Retried? |
 |---|---|
@@ -65,26 +73,34 @@ if err := tj.purgeReports.Send(ctx, run.ID, event); err != nil {
 | any other 4xx, or a 3xx | no: our request is wrong, and it'd be wrong every time |
 | an error before the call (a body that can't be encoded, a URL that can't be parsed) | no: a bug |
 
+<!-- remove:worker -->
 A 429's `Retry-After` isn't honoured yet: the job is retried with the queue's own growing delays.
 
 A report whose job runs out of tries is lost: the purge has already happened, and the job fails
 for good. That's fine for the purge, since the next day's report says the same thing; work whose
 report must arrive (a payment's receipt) writes it to an outbox table in the same transaction and
-sends it from a job of its own ([worker.md](worker.md#queueing-from-the-api)).
+sends it from a job of its own ([worker.md](worker.md)).
 
+<!-- remove:end -->
 ## Every call may happen twice
 
-A job runs again after any failure, and a call that timed out may have worked on the other side.
-So:
+Work gets repeated (a job runs again after any failure, a client sends a request again), and a
+call that timed out may have worked on the other side. So:
 
-- **The outside call comes last**, after the database work, and the database work is safe to repeat
-  (the purge deletes by a condition, so a second run deletes nothing).
-- **Send what's true after a repeat too.** The purge reports "done tasks older than 30 days are
-  gone", not how many it deleted: after a failed report the job runs again, deletes nothing, and a
-  count would say 0.
-- **Send an idempotency key** when the service accepts one: the job's ID (`queue.RunFrom(ctx)`) is
-  the same on every try, so the service can drop the repeat (`Idempotency-Key` header in
-  `internal/webhook`). Payments and emails must have one.
+- **The outside call comes last**, after the database work, and the database work is safe to
+  repeat.
+- **Send what's true after a repeat too**, not a change that a repeat would undo or double.
+- **Send an idempotency key** when the service accepts one: the same on every try of one piece of
+  work, so the service can drop the repeat (the `Idempotency-Key` header in `internal/webhook`).
+  Payments and emails must have one.
+
+<!-- remove:worker -->
+The worker's purge does all three. It deletes by a condition, so a second run deletes nothing. It
+reports "done tasks older than 30 days are gone", not how many it deleted: after a failed report the
+job runs again, deletes nothing, and a count would say 0. Its key is the job's ID
+(`queue.RunFrom(ctx)`), the same on every try.
+
+<!-- remove:end -->
 
 ## Errors and logs
 
@@ -102,5 +118,8 @@ Fake the outside service, not our code: an `httptest.Server` stands in for it, a
 what we sent (method, headers, body, idempotency key) and what our code does with each kind of
 reply: success, a failure that's retried, one that isn't, a redirect, and a service too slow to
 answer. Give a test of a time limit a deadline of its own, so a missing limit fails the test
-instead of hanging it. See `internal/httpclient` and `internal/webhook`'s tests, and the purge's
-(`TestPurgeDoneTasksReportsToTheWebhook` and its neighbours in `internal/worker/tasks_test.go`).
+instead of hanging it. See `internal/httpclient` and `internal/webhook`'s tests.
+<!-- remove:worker -->
+The purge's are `TestPurgeDoneTasksReportsToTheWebhook` and its neighbours in
+`internal/worker/tasks_test.go`.
+<!-- remove:end -->

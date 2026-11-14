@@ -2,8 +2,8 @@
 
 Work that shouldn't make a caller wait (sending email, a report, a clean-up) runs as a **job** in
 the worker (`cmd/worker`), not in a request. Jobs go through a queue in Valkey (an open-source
-fork of Redis; any Redis works), run by [asynq](https://github.com/hibiken/asynq). The API puts
-jobs on the queue; the worker takes them off and runs them, retrying the ones that fail.
+fork of Redis; any Redis works), run by [asynq](https://github.com/hibiken/asynq). Code puts jobs
+on the queue; the worker takes them off and runs them, retrying the ones that fail.
 
 Our code sees the queue only through `internal/queue`: a job (`queue.Job`), queueing one
 (`queue.Enqueuer`), a handler (`func(ctx, payload []byte) error`), the run it's in (`queue.Run`)
@@ -12,7 +12,10 @@ and a timetable (`queue.Schedule`). `internal/queue/valkey` implements them with
 in `cmd/`, not edits across the features.
 
 The example: `tasks:purge_done` deletes tasks marked done long ago. The worker's scheduler queues
-it every day at midnight UTC, and `POST /task-purges` queues it on demand.
+it every day at midnight UTC.
+<!-- remove:api -->
+`POST /task-purges` queues it on demand.
+<!-- remove:end -->
 
 ## Where things go
 
@@ -20,13 +23,13 @@ it every day at midnight UTC, and `POST /task-purges` queues it on demand.
 |---|---|
 | a job's type name, payload struct and options (timeout, retries) | `internal/jobs/<feature>.go`, built as a `queue.Job` |
 | the handler, `func(ctx, payload []byte) error` | `internal/worker/<feature>.go`, mounted in `NewMux` (`internal/worker/worker.go`) |
-| the rules it applies | the feature's service (`internal/task`), the same one the API calls |
+| the rules it applies | the feature's service (`internal/task`), the same one every entry point calls |
 | wiring a new service | a field in `worker.Services` and a line in `worker.NewServices` |
 | a job that runs on a timetable | a `queue.Schedule` from the feature's schedule function (`taskSchedules`), listed in `Schedules` |
 | tests | `internal/worker/<feature>_test.go` |
 
-The API and the worker build and read jobs only through `internal/jobs`, so they can't disagree on
-a type name or a field.
+Everything that queues or runs a job builds and reads it only through `internal/jobs`, so they
+can't disagree on a type name or a field.
 
 ## Every job can run twice
 
@@ -45,7 +48,7 @@ sent before sending it. Test it: run the job twice and check the rows after each
 
 ## Payloads are a contract between versions
 
-During a deploy, old and new code run side by side: a job queued by the new API may be run by an
+During a deploy, old and new code run side by side: a job queued by new code may be run by an
 old worker, and the other way round. So:
 
 - a payload only **gains** fields; never rename or remove one, or change its meaning;
@@ -118,6 +121,7 @@ count), never the payload.
 asynq also logs its own events (starting, shutting down, "Retry exhausted for task", a job put
 back in the queue), marked `"source":"asynq"`. Alert on the `job completed` lines, not on those.
 
+<!-- remove:api -->
 ## Queueing from the API
 
 An endpoint that queues a job replies `202 Accepted` with the job's ID, `{"job_id": "..."}`, so
@@ -133,6 +137,7 @@ a row that was never saved. When you need both (save an order, then email it), u
 in the same transaction as the row, insert a row into an `outbox` table; a scheduled job reads the
 outbox, queues the jobs and deletes the rows it queued.
 
+<!-- remove:end -->
 ## Scheduled jobs
 
 Each feature's schedule function (`taskSchedules`) returns its jobs that run on a timetable, as
@@ -188,8 +193,8 @@ so no statement holds locks for long, and add an index that matches the conditio
 
 ```sh
 make db-up        # Postgres and Valkey
-make run-worker   # the worker; `make run` for the API
+make run-worker   # the worker
 ```
 
-Deploy the worker image (`make image` builds `<name>-worker`) next to the API, with the
-settings `cmd/worker/settings.go` reads. It serves no port; run as many copies as the queue needs.
+Deploy the worker image (`make image` builds `<name>-worker`) with the settings
+`cmd/worker/settings.go` reads. It serves no port; run as many copies as the queue needs.

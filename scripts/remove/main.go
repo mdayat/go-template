@@ -38,6 +38,20 @@ func parts() map[string][]string {
 	}
 }
 
+// mentions are words that, once a part is removed, no file should still contain: its paths and
+// what only it uses. A file that does points at something gone, usually a doc that wasn't marked.
+// Matching is plain and case-sensitive, so each spelling is listed.
+func mentions() map[string][]string {
+	return map[string][]string{
+		"api": {"cmd/api", "internal/api", "http-api.md", "HTTP_ADDR", "testAPI", "/healthz"},
+		"worker": {
+			"cmd/worker", "internal/worker", "internal/jobs", "internal/queue", "testqueue", "worker.md",
+			"testWorker", "run-worker", "REDIS_URL", "PURGE_WEBHOOK_URL", "task-purges",
+			"Valkey", "valkey", "VALKEY", "Redis", "redis", "asynq",
+		},
+	}
+}
+
 // templateOnly marks blocks that only the template needs; any run removes them.
 const templateOnly = "template"
 
@@ -108,7 +122,67 @@ func run(what string) error {
 				strings.Join(args, " "), err, what, undoHint)
 		}
 	}
+
+	files, err = gitFiles()
+	if err != nil {
+		return err
+	}
+	found, err := findMentions(".", files, mentions()[what], paths, parts()["markers"])
+	if err != nil {
+		return err
+	}
+	if len(found) > 0 {
+		return fmt.Errorf("removed, but these lines still mention the %s (edit them, or mark them for removal):\n%s",
+			what, strings.Join(found, "\n"))
+	}
 	return nil
+}
+
+// findMentions returns "file:line: text" for each line of files under dir that contains one of
+// words, skipping files under skip and go.sum files (module hashes; go mod tidy keeps them right).
+func findMentions(dir string, files, words []string, skip ...[]string) ([]string, error) {
+	if len(words) == 0 {
+		return nil, nil
+	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+
+	var found []string
+	for _, path := range files {
+		if path == "" || underAny(path, skip) || path == "go.sum" || strings.HasSuffix(path, "/go.sum") {
+			continue
+		}
+		info, err := root.Lstat(path)
+		if err != nil || !info.Mode().IsRegular() {
+			continue
+		}
+		content, err := root.ReadFile(path)
+		if err != nil || bytes.IndexByte(content, 0) >= 0 {
+			continue
+		}
+		for i, line := range strings.Split(string(content), "\n") {
+			for _, w := range words {
+				if strings.Contains(line, w) {
+					found = append(found, fmt.Sprintf("%s:%d: %s", path, i+1, strings.TrimSpace(line)))
+					break
+				}
+			}
+		}
+	}
+	return found, nil
+}
+
+// underAny reports whether path is one of, or inside one of, the paths in any of lists.
+func underAny(path string, lists [][]string) bool {
+	for _, paths := range lists {
+		if under(path, paths) {
+			return true
+		}
+	}
+	return false
 }
 
 const undoHint = "; or undo everything with: git restore . && git clean -fd"
@@ -201,8 +275,8 @@ func under(path string, paths []string) bool {
 // marker lines. A marker inside another block, an end without a start, a start without an end, or
 // an unknown part is an error.
 //
-// A dropped block takes one of the blank lines around it with it, so it leaves no double blank
-// line, and none at the start or end of the file.
+// A dropped block or marker line takes one of the blank lines around it with it, so it leaves no
+// double blank line, and none at the start or end of the file.
 func strip(content []byte, what string) ([]byte, error) {
 	lines := strings.SplitAfter(string(content), "\n")
 	known := parts()
@@ -226,15 +300,18 @@ func strip(content []byte, what string) ([]byte, error) {
 			continue
 		}
 		part := m[1]
+		// skip leaves a marker line out, and the blank line after it if one is already before it.
+		skip := func() {
+			skipBlank = len(out) == 0 || blank(out[len(out)-1])
+			dropped = true
+		}
 		switch {
 		case part == "end" && open == "":
 			return nil, fmt.Errorf("line %d: remove:end without a start", i+1)
 		case part == "end":
-			if drop(open) {
-				// The block went: drop the blank line after it if one is already before it.
-				skipBlank = len(out) == 0 || blank(out[len(out)-1])
-				dropped = true
-			} else if keepMarkers {
+			if drop(open) || !keepMarkers {
+				skip()
+			} else {
 				out = append(out, line)
 			}
 			open = ""
@@ -243,7 +320,9 @@ func strip(content []byte, what string) ([]byte, error) {
 		case known[part] == nil && part != templateOnly:
 			return nil, fmt.Errorf("line %d: unknown part remove:%s", i+1, part)
 		default:
-			if !drop(part) && keepMarkers {
+			if drop(part) || !keepMarkers {
+				skip()
+			} else {
 				out = append(out, line)
 			}
 			open, openedAt = part, i+1

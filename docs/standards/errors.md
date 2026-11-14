@@ -3,32 +3,47 @@
 Two rules hold everything up:
 
 1. **Services say what went wrong; entry points decide the response.** A service returns an
-   `apperr` kind; the HTTP layer turns the kind into a status code, and the worker turns the same
-   kind into "don't retry" ([worker.md](worker.md#errors-and-retries)). Services never know about
-   HTTP.
+   `apperr` kind, and each program decides what that means for its caller. Services never know how
+   they're called.
+   <!-- remove:api -->
+   - The HTTP API turns the kind into a status code.
+   <!-- remove:end -->
+   <!-- remove:worker -->
+   - The worker turns any kind into "don't retry" ([worker.md](worker.md#errors-and-retries)).
+   <!-- remove:end -->
 2. **Each error is logged once, where the request or job ends.** Inner code wraps and returns; it
-   never logs an error it also returns. The HTTP layer puts the error on the request's one summary
-   line, the worker on the job's ([logging.md](logging.md)).
+   never logs an error it also returns. The error goes on the one summary line of the work that
+   ended ([logging.md](logging.md)).
 
 ## Expected failures: `internal/apperr`
 
-| Kind | Meaning | HTTP |
-|---|---|---|
-| `apperr.BadRequest(detail)` | the input can't be read (bad JSON, a bad cursor) | 400 |
-| `apperr.Invalid(detail, fields...)` | readable, but breaks a rule; `fields` say which | 422 |
-| `apperr.NotFound(detail)` | the thing doesn't exist | 404 |
-| `apperr.Conflict(detail)` | clashes with current state (a duplicate) | 409 |
+| Kind | Meaning |
+|---|---|
+| `apperr.BadRequest(detail)` | the input can't be read (bad JSON, a bad cursor) |
+| `apperr.Invalid(detail, fields...)` | readable, but breaks a rule; `fields` say which |
+| `apperr.NotFound(detail)` | the thing doesn't exist |
+| `apperr.Conflict(detail)` | clashes with current state (a duplicate) |
 
+<!-- remove:api -->
+The HTTP API replies 400, 422, 404 and 409 for them.
+
+<!-- remove:end -->
 - `detail` and each field's message are **shown to the caller**, so they never hold internal
   details (SQL, IDs of other users, hostnames).
 - Add context by wrapping, not by editing the detail:
   `fmt.Errorf("get task %s: %w", id, apperr.NotFound("task not found"))`. The wrapped text goes to
   the log; only the detail goes to the caller.
-- Any error that isn't an `apperr` is **unexpected** (a bug or an outage): the caller gets a 500
-  with the fixed text `internal server error`, and the full error goes to the log.
+- Any error that isn't an `apperr` is **unexpected** (a bug or an outage): the full error goes to
+  the log, and the caller learns nothing about it.
+<!-- remove:api -->
+- The HTTP API replies 500 with the fixed text `internal server error` to an unexpected error.
+<!-- remove:end -->
 - Add a kind only when some caller must react to it differently from the existing ones (sign-in
-  would add an unauthorized kind). `problemFor` (`internal/api/problem.go`) maps each kind; the
-  linter fails until a new kind has its own case.
+  would add an unauthorized kind).
+<!-- remove:api -->
+- `problemFor` (`internal/api/problem.go`) maps each kind to a reply; the linter fails until a new
+  kind has its own case.
+<!-- remove:end -->
 
 ## Turning driver errors into kinds
 
@@ -42,6 +57,7 @@ Services recognise these errors through `internal/postgres` (`IsNotFound`, `IsUn
 never by importing pgx: changing the driver then changes that package and the generated queries,
 not every service. — lint (depguard)
 
+<!-- remove:api -->
 ## Handlers
 
 Handlers have the type `func(w, r) error` and are wrapped with `Handle`:
@@ -77,6 +93,7 @@ whose query is cut off by it returns the `context.DeadlineExceeded` error as usu
 a 503 "the request took too long", and the summary line logs it at error level, since a slow
 endpoint is our problem.
 
+<!-- remove:end -->
 ## Don't
 
 - Log an error and also return it: it shows up twice and the counts lie.

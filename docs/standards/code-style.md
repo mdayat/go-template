@@ -110,16 +110,23 @@ The rules for which error to return live in [errors.md](errors.md). Style only:
 - Import pgx only in `internal/postgres` and the code that opens or builds databases
   (`internal/startup`, `internal/testdb`); services recognise database errors through
   `internal/postgres`. Tests may use pgx to seed and read rows. — lint (depguard)
+<!-- remove:worker -->
 - Queue, handle and schedule jobs through `internal/queue`; `cmd/` picks the implementation. asynq
   and go-redis stay in `internal/queue/valkey`, `internal/startup` and `internal/testqueue`, and
   `internal/queue/valkey` in `cmd/`. — lint (depguard)
+<!-- remove:end -->
 - Call outside services with a client from `httpclient.New`, never `http.Get` or
   `http.DefaultClient`, which have no time limit ([outside-calls.md](outside-calls.md)). — lint
   (forbidigo)
 
-## HTTP, database and tests
+## Other pages
 
-These have their own pages: [http-api.md](http-api.md), [database.md](database.md),
-[testing.md](testing.md), [logging.md](logging.md). The linter also checks that HTTP bodies are
-closed and requests carry a context (bodyclose, noctx), that row loops check `rows.Err()`
-(rowserrcheck), that zerolog events are sent (zerologlint), and the security checks in gosec.
+These have their own pages: [database.md](database.md), [testing.md](testing.md),
+[logging.md](logging.md).
+<!-- remove:api -->
+The HTTP API's rules are in [http-api.md](http-api.md).
+<!-- remove:end -->
+
+The linter also checks that HTTP bodies are closed and requests carry a context (bodyclose, noctx),
+that row loops check `rows.Err()` (rowserrcheck), that zerolog events are sent (zerologlint), and
+the security checks in gosec.

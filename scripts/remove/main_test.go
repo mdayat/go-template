@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -182,29 +183,62 @@ func TestStripFilesSkips(t *testing.T) {
 	}
 }
 
+// Lines still naming a removed part are found, except in the files skipped (the remove tool lists
+// every part's paths itself).
+func TestFindMentions(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	names := writeFiles(t, root, map[string]string{
+		"README.md":              lines("# App", "See internal/api for routes.", "Nothing here."),
+		"docs/a.md":              lines("Uses HTTP_ADDR.", "fine"),
+		"scripts/remove/main.go": lines(`"internal/api"`),
+		"binary":                 "\x00internal/api",
+		"tools/go.sum":           lines("example.com/internal/api v1.0.0 h1:abc="),
+	})
+
+	got, err := findMentions(root, names, []string{"internal/api", "HTTP_ADDR"}, []string{"scripts/remove"})
+	if err != nil {
+		t.Fatalf("findMentions() error = %v", err)
+	}
+
+	slices.Sort(got)
+	want := []string{"README.md:2: See internal/api for routes.", "docs/a.md:1: Uses HTTP_ADDR."}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("findMentions() mismatch (-want +got):\n%s", diff)
+	}
+	if got, err := findMentions(root, names, nil); got != nil || err != nil {
+		t.Errorf("findMentions(no words) = %q, %v; want nil, nil", got, err)
+	}
+}
+
 // A removed block leaves no double blank line, and none at the start or end of the file.
 func TestStripLeavesNoDoubleBlankLines(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
 		name string
+		what string
 		file string
 		want string
 	}{
-		{"between blank lines", lines("a", "", "# remove:api", "x", "# remove:end", "", "b"), lines("a", "", "b")},
-		{"at the start", lines("# remove:api", "x", "# remove:end", "", "b"), lines("b")},
-		{"at the end", lines("a", "", "# remove:api", "x", "# remove:end"), lines("a")},
-		{"no blank lines around", lines("a", "# remove:api", "x", "# remove:end", "b"), lines("a", "b")},
-		{"Windows line endings", "a\r\n\r\n# remove:api\r\nx\r\n# remove:end\r\n\r\nb\r\n", "a\r\n\r\nb\r\n"},
+		{"between blank lines", "api", lines("a", "", "# remove:api", "x", "# remove:end", "", "b"), lines("a", "", "b")},
+		{"at the start", "api", lines("# remove:api", "x", "# remove:end", "", "b"), lines("b")},
+		{"at the end", "api", lines("a", "", "# remove:api", "x", "# remove:end"), lines("a")},
+		{"no blank lines around", "api", lines("a", "# remove:api", "x", "# remove:end", "b"), lines("a", "b")},
+		{
+			"only the marker lines go", "markers",
+			lines("a", "", "# remove:worker", "", "x", "", "# remove:end", "", "b"), lines("a", "", "x", "", "b"),
+		},
+		{"Windows line endings", "api", "a\r\n\r\n# remove:api\r\nx\r\n# remove:end\r\n\r\nb\r\n", "a\r\n\r\nb\r\n"},
 	}
 	for _, tt := range tests {
-		got, err := strip([]byte(tt.file), "api")
+		got, err := strip([]byte(tt.file), tt.what)
 		if err != nil {
-			t.Errorf("%s: strip() error = %v", tt.name, err)
+			t.Errorf("%s: strip(%s) error = %v", tt.name, tt.what, err)
 			continue
 		}
 		if diff := cmp.Diff(tt.want, string(got)); diff != "" {
-			t.Errorf("%s: strip() mismatch (-want +got):\n%s", tt.name, diff)
+			t.Errorf("%s: strip(%s) mismatch (-want +got):\n%s", tt.name, tt.what, diff)
 		}
 	}
 }
