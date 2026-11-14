@@ -33,10 +33,14 @@ Two rules hold everything up:
 ## Turning driver errors into kinds
 
 Only the service that ran the query knows what a database error means, so the mapping happens
-there, once: `pgx.ErrNoRows` becomes `NotFound`, a unique violation on a known constraint becomes
+there, once: "no row" becomes `NotFound`, a unique violation on a known constraint becomes
 `Conflict`. Handlers never look at driver errors. See `notFoundOr` and `conflictOr` in
 `internal/task/service.go`. Match a unique violation by its constraint name, so a new unique rule
 isn't silently reported as the wrong conflict.
+
+Services recognise these errors through `internal/postgres` (`IsNotFound`, `IsUniqueViolation`),
+never by importing pgx: changing the driver then changes that package and the generated queries,
+not every service. — lint (depguard)
 
 ## Handlers
 

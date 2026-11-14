@@ -19,6 +19,7 @@ Run `make fmt lint test check-generated`. All four must pass; don't silence a li
 | business rules, mapping database errors | `internal/<feature>/` service | `internal/task/service.go` |
 | routes and handlers | `internal/api/<feature>.go`, mounted in `router.go` | `internal/api/tasks.go` |
 | wiring a new service | a field in `api.Services` and a line in `api.NewServices` (`router.go`); the app and the tests both build services there | `Tasks` |
+| service tests: every rule, on a real database | `internal/<feature>/service_test.go` | `internal/task/service_test.go` |
 | endpoint tests | `internal/api/<feature>_test.go` | `internal/api/tasks_test.go` |
 | a background job: type name, payload, timeout, retries | `internal/jobs/<feature>.go` | `internal/jobs/tasks.go` |
 | job handlers | `internal/worker/<feature>.go`, mounted in `NewMux` (`worker.go`); services wired in `worker.Services` / `worker.NewServices` | `internal/worker/tasks.go` |
@@ -31,15 +32,17 @@ Run `make fmt lint test check-generated`. All four must pass; don't silence a li
 
 Never edit `internal/db/` (generated) or a migration that's already merged (write a new one).
 Use JSON only through `internal/json`, never go-json or `encoding/json` (tests may use
-`encoding/json`); lint refuses it.
+`encoding/json`); lint refuses it. Import pgx only in `internal/postgres`, `internal/startup`
+and `internal/testdb` (tests may use it to seed rows); lint refuses it elsewhere. A generated
+`pgtype` type gets an override in `sqlc.yaml` instead.
 
 ## Rules
 
 **Errors** ([errors.md](docs/standards/errors.md))
 - Services return `apperr` kinds (`BadRequest`, `Invalid`, `NotFound`, `Conflict`) for expected
   failures; anything else becomes a 500. Never return an HTTP status from a service.
-- Map driver errors to kinds in the service (`pgx.ErrNoRows` → `NotFound`, a named unique
-  constraint → `Conflict`), never in a handler.
+- Map driver errors to kinds in the service, through `internal/postgres` (`IsNotFound` →
+  `NotFound`, `IsUniqueViolation` on a named constraint → `Conflict`), never in a handler.
 - Wrap with context: `fmt.Errorf("get task %s: %w", id, err)`. Never log an error you return.
 - `apperr` details are shown to callers: no SQL, hosts or internal IDs in them.
 
@@ -73,6 +76,8 @@ Use JSON only through `internal/json`, never go-json or `encoding/json` (tests m
 - Retry a transaction only on 40001 and 40P01, and never do outside calls inside it.
 
 **Tests** ([testing.md](docs/standards/testing.md))
+- Test every rule on the service (`internal/<feature>/service_test.go`); endpoint and job tests
+  need one case per distinct reply, not every input that gives it.
 - Endpoint tests use `testAPI(t)` (the real router and services on a database of the test's own);
   check the reply **and** the rows. Don't build a router per feature. Job tests use `testWorker(t)`
   the same way; a queued job is checked with `testqueue.Take`.

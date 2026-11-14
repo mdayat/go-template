@@ -93,7 +93,6 @@ func TestPurgeDoneTasksRejects(t *testing.T) {
 		{"not JSON", `not json`},
 		{"no age", `{}`},
 		{"zero days", `{"older_than_days":0}`},
-		{"over the limit", `{"older_than_days":3651}`},
 		{"age as text", `{"older_than_days":"30"}`},
 	}
 	for _, tt := range tests {

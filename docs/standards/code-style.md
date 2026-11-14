@@ -107,6 +107,9 @@ The rules for which error to return live in [errors.md](errors.md). Style only:
 - Use JSON only through `internal/json` (`Marshal`, `Unmarshal`, `DecodeStrict`), never go-json
   or `encoding/json` directly, so the library can be replaced in that one package. Tests may use
   `encoding/json` to check that replies are plain JSON. — lint (depguard)
+- Import pgx only in `internal/postgres` and the code that opens or builds databases
+  (`internal/startup`, `internal/testdb`); services recognise database errors through
+  `internal/postgres`. Tests may use pgx to seed and read rows. — lint (depguard)
 
 ## HTTP, database and tests
 

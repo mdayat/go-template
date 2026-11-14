@@ -5,18 +5,16 @@ package task
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/mdayat/go-template/internal/apperr"
 	"github.com/mdayat/go-template/internal/db"
+	"github.com/mdayat/go-template/internal/postgres"
 )
 
 const (
@@ -29,8 +27,6 @@ const (
 
 	// The constraint behind a duplicate title, from db/schema.sql.
 	titleUniqueConstraint = "tasks_title_key"
-	// Postgres's error code for a unique violation.
-	codeUniqueViolation = "23505"
 )
 
 // Task is a to-do item.
@@ -205,15 +201,14 @@ func cleanTitle(title string) (string, error) {
 }
 
 func notFoundOr(err error) error {
-	if errors.Is(err, pgx.ErrNoRows) {
+	if postgres.IsNotFound(err) {
 		return apperr.NotFound("task not found")
 	}
 	return err
 }
 
 func conflictOr(err error) error {
-	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) && pgErr.Code == codeUniqueViolation && pgErr.ConstraintName == titleUniqueConstraint {
+	if postgres.IsUniqueViolation(err, titleUniqueConstraint) {
 		return apperr.Conflict("a task with this title already exists")
 	}
 	return err

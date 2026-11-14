@@ -12,6 +12,7 @@ turned into typed Go by [sqlc](https://sqlc.dev); migrations are written by
 | `db/migrations/` | generated SQL steps from the old schema to the new, plus `atlas.sum` |
 | `db/queries/*.sql` | every query, one file per table or feature |
 | `internal/db/` | generated Go: never edit it, run `make generate` |
+| `internal/postgres/` | what services use instead of importing pgx: recognising errors (`IsNotFound`, `IsUniqueViolation`) |
 
 ## Changing the schema
 
@@ -44,8 +45,11 @@ migration must work with the code before it **and** after it. Atlas Community do
 ## Queries
 
 - One SQL statement per sqlc query; name it `VerbNoun` (`GetTask`, `ListTasksAfter`).
-- `sqlc.yaml` maps `uuid` to `uuid.UUID`, `timestamptz` to `time.Time`, and nullable arguments
-  to pointers, so services see plain Go types.
+- `sqlc.yaml` maps `uuid` to `uuid.UUID` and `timestamptz` to `time.Time` (pointers when the
+  column is nullable), and nullable arguments to pointers, so services see plain Go types. Other
+  types (`date`, `numeric`, `interval`) come out as pgx's `pgtype` types, which
+  services can't import (lint: depguard): add an override for the type in `sqlc.yaml`, as for
+  `timestamptz`, or a conversion in `internal/postgres`.
 - Every list query has a `LIMIT` and an index for its `ORDER BY` ([http-api.md](http-api.md#ids-and-paging)).
 - Postgres `text` can't hold the NUL character (JSON `"\u0000"`), and an insert with one fails as
   a 500. Reject it in the service with the field's other rules (`cleanTitle`).
@@ -86,4 +90,5 @@ func inTx(ctx context.Context, pool *pgxpool.Pool, fn func(q *db.Queries) error)
   reads data and decides based on it, and then the retry matters.
 
 The template ships no such helper because its example needs only one statement per request; add it
-with the first service that needs a transaction.
+to `internal/postgres` with the first service that needs a transaction. Services don't import pgx
+(lint: depguard), so that package also gives them the pool's type, `type Pool = pgxpool.Pool`.

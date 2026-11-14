@@ -10,10 +10,15 @@ coverage number: covered lines can still be wrong, and a test that can't fail pr
   `internal/api/main_test.go` builds them), then checks two things: **the reply and the rows**.
   Example: `internal/api/tasks_test.go`. A job test runs the job through the real handlers
   (`testWorker` in `internal/worker/main_test.go`) and checks **the error and the rows**.
+- **A service's rules are tested on the service**, on a real database: every input a rule
+  accepts or refuses, the exact limits, and the rows after. Example: `internal/task/service_test.go`.
+  The rules stay tested whichever entry points a project keeps. Endpoint and job tests then check
+  what the caller gets: one case per distinct reply or outcome, not every input that gives the
+  same one.
 - **Don't mock our own code.** A mock of our own service tests the mock. Fake only what we can't
   run locally: a payment provider, an email service, another company's API.
-- **Every success and every error path** a caller can reach: each status code an endpoint can
-  return, with the rows unchanged after a failure.
+- **Every success and every error path** a caller can reach: each reply an endpoint can return
+  (status, detail, field errors), with the rows unchanged after a failure.
 - **Unit tests for tricky logic only** (parsing, calculations), as plain table tests; see
   `internal/api/decode_test.go`.
 - **The cases that break in production**: two requests at once (`TestCreateTaskSameTitleAtOnce`),

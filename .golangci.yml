@@ -64,6 +64,19 @@ linters:
           deny:
             - pkg: encoding/json
               desc: use internal/json, the one package that picks the JSON library
+        database-driver:
+          # Tests may use pgx to seed and read rows. startup opens the pool, testdb makes the test
+          # databases, and internal/db is generated.
+          files:
+            - $all
+            - "!$test"
+            - "!**/internal/db/*.go"
+            - "!**/internal/postgres/*.go"
+            - "!**/internal/startup/*.go"
+            - "!**/internal/testdb/*.go"
+          deny:
+            - pkg: github.com/jackc/pgx/v5
+              desc: recognise database errors through internal/postgres; map pgtype types to Go types in sqlc.yaml
     # Without these it only checks database/sql and stays silent on pgx. (sqlclosecheck isn't
     # enabled: it doesn't catch unclosed pgx rows either way.)
     rowserrcheck:
