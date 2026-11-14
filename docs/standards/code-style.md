@@ -110,9 +110,9 @@ The rules for which error to return live in [errors.md](errors.md). Style only:
 - Import pgx only in `internal/postgres` and the code that opens or builds databases
   (`internal/startup`, `internal/testdb`); services recognise database errors through
   `internal/postgres`. Tests may use pgx to seed and read rows. — lint (depguard)
-- Queue jobs through `queue.Enqueuer` (`internal/queue`), passed in from `cmd/`; asynq and go-redis
-  stay in `internal/queue/valkey`, `internal/startup`, `internal/testqueue` and the worker. — lint
-  (depguard)
+- Queue, handle and schedule jobs through `internal/queue`; `cmd/` picks the implementation. asynq
+  and go-redis stay in `internal/queue/valkey`, `internal/startup` and `internal/testqueue`, and
+  `internal/queue/valkey` in `cmd/`. — lint (depguard)
 
 ## HTTP, database and tests
 

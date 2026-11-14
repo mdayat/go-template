@@ -1,5 +1,6 @@
-// Package valkey implements internal/queue on Valkey (or Redis) with asynq. The API and the features
-// queue jobs through internal/queue, never asynq itself.
+// Package valkey implements internal/queue on Valkey (or Redis) with asynq: queueing jobs, running
+// them, and queueing them on a timetable. Only cmd/ uses it; everything else goes through
+// internal/queue.
 package valkey
 
 import (
@@ -27,7 +28,7 @@ func NewEnqueuer(client redis.UniversalClient) *Enqueuer {
 
 // Enqueue queues job and returns asynq's ID for it.
 func (e *Enqueuer) Enqueue(ctx context.Context, job queue.Job) (string, error) {
-	task, err := NewTask(job)
+	task, err := newTask(job)
 	if err != nil {
 		return "", err
 	}
@@ -38,10 +39,10 @@ func (e *Enqueuer) Enqueue(ctx context.Context, job queue.Job) (string, error) {
 	return info.ID, nil
 }
 
-// NewTask turns job into an asynq task, refusing what asynq would silently change. It checks what
+// newTask turns job into an asynq task, refusing what asynq would silently change. It checks what
 // asynq itself checks only when queueing (a type, a queue name) too: the scheduler doesn't, and
 // a scheduled job without them would fail only when it fires.
-func NewTask(job queue.Job) (*asynq.Task, error) {
+func newTask(job queue.Job) (*asynq.Task, error) {
 	switch {
 	case strings.TrimSpace(job.Type) == "":
 		return nil, errors.New("a job needs a type")

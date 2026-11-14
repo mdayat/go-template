@@ -6,12 +6,11 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
-	"github.com/hibiken/asynq"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/mdayat/go-template/internal/jobs"
-	"github.com/mdayat/go-template/internal/queue/valkey"
+	"github.com/mdayat/go-template/internal/queue"
 )
 
 // seedTask inserts a task last changed age ago.
@@ -39,17 +38,14 @@ func taskTitles(t *testing.T, pool *pgxpool.Pool) []string {
 	return titles
 }
 
-func purgeJob(t *testing.T, olderThanDays int) *asynq.Task {
+// purgePayload returns the payload the API and the scheduler queue for a purge.
+func purgePayload(t *testing.T, olderThanDays int) []byte {
 	t.Helper()
 	job, err := jobs.NewPurgeDoneTasks(olderThanDays)
 	if err != nil {
 		t.Fatalf("NewPurgeDoneTasks(%d) error = %v", olderThanDays, err)
 	}
-	task, err := valkey.NewTask(job)
-	if err != nil {
-		t.Fatalf("NewTask(%+v) error = %v", job, err)
-	}
-	return task
+	return job.Payload
 }
 
 // Deletes only tasks that are done and older than the age, and a second run changes nothing: asynq
@@ -63,7 +59,7 @@ func TestPurgeDoneTasks(t *testing.T) {
 	want := []string{"done 29 days ago", "open 40 days"}
 
 	for _, run := range []string{"first", "second"} {
-		if err := mux.ProcessTask(t.Context(), purgeJob(t, 30)); err != nil {
+		if err := mux.Process(t.Context(), jobs.TypePurgeDoneTasks, purgePayload(t, 30)); err != nil {
 			t.Fatalf("%s purge error = %v", run, err)
 		}
 		if diff := cmp.Diff(want, taskTitles(t, pool)); diff != "" {
@@ -78,8 +74,8 @@ func TestPurgeDoneTasksAcceptsUnknownFields(t *testing.T) {
 	mux, pool := testWorker(t)
 	seedTask(t, pool, "done 31 days ago", true, 31*day)
 
-	job := asynq.NewTask(jobs.TypePurgeDoneTasks, []byte(`{"older_than_days":30,"added_later":true}`))
-	if err := mux.ProcessTask(t.Context(), job); err != nil {
+	payload := []byte(`{"older_than_days":30,"added_later":true}`)
+	if err := mux.Process(t.Context(), jobs.TypePurgeDoneTasks, payload); err != nil {
 		t.Fatalf("purge error = %v", err)
 	}
 	if got := taskTitles(t, pool); len(got) != 0 {
@@ -106,10 +102,10 @@ func TestPurgeDoneTasksRejects(t *testing.T) {
 			mux, pool := testWorker(t)
 			seedTask(t, pool, "done 31 days ago", true, 31*day)
 
-			err := mux.ProcessTask(t.Context(), asynq.NewTask(jobs.TypePurgeDoneTasks, []byte(tt.payload)))
+			err := mux.Process(t.Context(), jobs.TypePurgeDoneTasks, []byte(tt.payload))
 
-			if !errors.Is(err, asynq.SkipRetry) {
-				t.Errorf("purge error = %v, want one wrapping asynq.SkipRetry", err)
+			if !errors.Is(err, queue.ErrNoRetry) {
+				t.Errorf("purge error = %v, want one wrapping queue.ErrNoRetry", err)
 			}
 			if diff := cmp.Diff([]string{"done 31 days ago"}, taskTitles(t, pool)); diff != "" {
 				t.Errorf("tasks after purge mismatch (-want +got):\n%s", diff)
@@ -119,14 +115,29 @@ func TestPurgeDoneTasksRejects(t *testing.T) {
 }
 
 // The purge is on the timetable, unique so that several workers queue it once a day, not once each.
-func TestSchedulerQueuesDailyPurge(t *testing.T) {
+func TestSchedulesHoldTheDailyPurge(t *testing.T) {
 	t.Parallel()
 
-	want := []scheduledEntry{{
-		Spec: "@daily", Type: jobs.TypePurgeDoneTasks, Payload: `{"older_than_days":30}`,
-		Opts: []string{"Unique(1h0m0s)"},
-	}}
-	if diff := cmp.Diff(want, scheduledEntries(t, jobs.TypePurgeDoneTasks)); diff != "" {
-		t.Errorf("scheduler entries mismatch (-want +got):\n%s", diff)
+	schedules, err := Schedules()
+	if err != nil {
+		t.Fatalf("Schedules() error = %v", err)
+	}
+
+	want := queue.Schedule{
+		Spec: "@daily",
+		Job: queue.Job{
+			Type: jobs.TypePurgeDoneTasks, Queue: jobs.Queue, Payload: []byte(`{"older_than_days":30}`),
+			Timeout: 5 * time.Minute, MaxRetries: 5,
+		},
+		Unique: time.Hour,
+	}
+	var got []queue.Schedule
+	for _, s := range schedules {
+		if s.Job.Type == jobs.TypePurgeDoneTasks {
+			got = append(got, s)
+		}
+	}
+	if diff := cmp.Diff([]queue.Schedule{want}, got); diff != "" {
+		t.Errorf("purge schedules mismatch (-want +got):\n%s", diff)
 	}
 }

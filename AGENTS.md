@@ -22,8 +22,8 @@ Run `make fmt lint test check-generated`. All four must pass; don't silence a li
 | service tests: every rule, on a real database | `internal/<feature>/service_test.go` | `internal/task/service_test.go` |
 | endpoint tests | `internal/api/<feature>_test.go` | `internal/api/tasks_test.go` |
 | a background job: type name, payload, timeout, retries | `internal/jobs/<feature>.go` | `internal/jobs/tasks.go` |
-| job handlers | `internal/worker/<feature>.go`, mounted in `NewMux` (`worker.go`); services wired in `worker.Services` / `worker.NewServices` | `internal/worker/tasks.go` |
-| jobs on a timetable | the feature's schedule function in `internal/worker/<feature>.go`, called from `newScheduler` (`worker.go`) | `scheduleTaskJobs` |
+| job handlers, `func(ctx, payload []byte) error` | `internal/worker/<feature>.go`, mounted in `NewMux` (`worker.go`); services wired in `worker.Services` / `worker.NewServices` | `internal/worker/tasks.go` |
+| jobs on a timetable | the feature's schedule function in `internal/worker/<feature>.go`, returning `queue.Schedule`s, listed in `Schedules` (`worker.go`) | `taskSchedules` |
 | job tests | `internal/worker/<feature>_test.go`, through `testWorker(t)` | `internal/worker/tasks_test.go` |
 | anything several features use | not in one feature's files (removing that feature would break the rest): test helpers in `internal/api/main_test.go`, other code in a shared file such as `router.go` | `send`, `readProblem`, `defaultPageSize` |
 | schema | `db/schema.sql`, then `make migrate-diff name=<what>` | `db/migrations/` |
@@ -34,10 +34,10 @@ Never edit `internal/db/` (generated) or a migration that's already merged (writ
 Use JSON only through `internal/json`, never go-json or `encoding/json` (tests may use
 `encoding/json`); lint refuses it. Import pgx only in `internal/postgres`, `internal/startup`
 and `internal/testdb` (tests may use it to seed rows); lint refuses it elsewhere. A generated
-`pgtype` type gets an override in `sqlc.yaml` instead. The API queues jobs through
-`queue.Enqueuer` (`internal/queue`), never asynq or go-redis; lint refuses them outside
-`internal/queue/valkey`, `internal/startup`, `internal/testqueue` and the worker, and
-`internal/queue/valkey` itself outside `cmd/` and the worker.
+`pgtype` type gets an override in `sqlc.yaml` instead. Jobs are queued, handled and
+scheduled through `internal/queue`, never asynq or go-redis; lint refuses them outside
+`internal/queue/valkey`, `internal/startup` and `internal/testqueue`, and `internal/queue/valkey`
+itself outside `cmd/`.
 
 ## Rules
 

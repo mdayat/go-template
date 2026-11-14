@@ -5,6 +5,12 @@ the worker (`cmd/worker`), not in a request. Jobs go through a queue in Valkey (
 fork of Redis; any Redis works), run by [asynq](https://github.com/hibiken/asynq). The API puts
 jobs on the queue; the worker takes them off and runs them, retrying the ones that fail.
 
+Our code sees the queue only through `internal/queue`: a job (`queue.Job`), queueing one
+(`queue.Enqueuer`), a handler (`func(ctx, payload []byte) error`), the run it's in (`queue.Run`)
+and a timetable (`queue.Schedule`). `internal/queue/valkey` implements them with asynq, and only
+`cmd/` picks it (lint: depguard). Moving to another queue is a new implementation and a few lines
+in `cmd/`, not edits across the features.
+
 The example: `tasks:purge_done` deletes tasks marked done long ago. The worker's scheduler queues
 it every day at midnight UTC, and `POST /task-purges` queues it on demand.
 
@@ -13,10 +19,10 @@ it every day at midnight UTC, and `POST /task-purges` queues it on demand.
 | What | Where |
 |---|---|
 | a job's type name, payload struct and options (timeout, retries) | `internal/jobs/<feature>.go`, built as a `queue.Job` |
-| the handler | `internal/worker/<feature>.go`, mounted in `NewMux` (`internal/worker/worker.go`) |
+| the handler, `func(ctx, payload []byte) error` | `internal/worker/<feature>.go`, mounted in `NewMux` (`internal/worker/worker.go`) |
 | the rules it applies | the feature's service (`internal/task`), the same one the API calls |
 | wiring a new service | a field in `worker.Services` and a line in `worker.NewServices` |
-| a job that runs on a timetable | `scheduler.Register` in the feature's schedule function (`scheduleTaskJobs`), called from `newScheduler` |
+| a job that runs on a timetable | a `queue.Schedule` from the feature's schedule function (`taskSchedules`), listed in `Schedules` |
 | tests | `internal/worker/<feature>_test.go` |
 
 The API and the worker build and read jobs only through `internal/jobs`, so they can't disagree on
@@ -58,7 +64,7 @@ what happens:
 | The handler returns | What happens |
 |---|---|
 | `nil` | done |
-| an `apperr` kind (bad payload, `NotFound`, `Invalid`) | failed for good, no retries: it would fail the same way every time |
+| an `apperr` kind (bad payload, `NotFound`, `Invalid`) | failed for good, no retries: it would fail the same way every time (`logJobs` marks it `queue.ErrNoRetry`) |
 | any other error (database down, a timeout, another service's 503) | retried, up to the job's `MaxRetries`; then failed for good |
 | a panic | caught, logged with its stack, retried like an error |
 
@@ -81,10 +87,11 @@ Every job sets its `Timeout` in `internal/jobs`, in whole seconds. Queueing refu
 asynq keeps whole seconds, cutting off the rest, and replaces a zero limit with its 30-minute
 default. The handler's context
 ends at the limit, so pass `ctx` to everything it calls, as in a request. A job past its limit
-counts as failed and is retried, whatever the handler then returns (an `apperr` kind included).
+counts as failed; asynq retries it while attempts are left, whatever the handler then returns (an
+`apperr` kind included).
 
 On SIGTERM the worker stops its scheduler, stops taking jobs, and gives running ones 8 s to finish
-(`shutdownTimeout` in `internal/worker/worker.go`, below the 10 s most platforms wait before a hard
+(`ShutdownTimeout` in `internal/worker/worker.go`, below the 10 s most platforms wait before a hard
 kill). Jobs still running then are put back in the queue and their contexts cancelled, which stops
 their queries. They run again on the next worker, from the start.
 
@@ -118,10 +125,7 @@ the caller can find it in the worker's logs. Check the input before queueing (th
 check the job runs, or a read that the row exists), so the caller gets a 422 or 404 now instead of
 the job failing later where nobody sees it.
 
-Handlers queue through `queue.Enqueuer` (`Services.Jobs`), never asynq, go-redis or
-`internal/queue/valkey` directly: lint (depguard) refuses them in the API and the features.
-`cmd/api` picks the implementation. Moving to
-another queue is then a new implementation of `queue.Enqueuer`, not edits across the features.
+Handlers queue through `queue.Enqueuer` (`Services.Jobs`), which `cmd/api` passes in.
 
 **An endpoint either queues a job or writes rows, not both.** Writing a row and then queueing can
 half-fail: the row is saved, the queue is down, the job is lost; the other order runs the job for
@@ -131,13 +135,30 @@ outbox, queues the jobs and deletes the rows it queued.
 
 ## Scheduled jobs
 
-Each feature's schedule function (`scheduleTaskJobs`) registers its jobs that run on a timetable,
-as cron specs in UTC (`"@daily"`,
-`"0 3 * * *"`). Every worker process runs a scheduler, so with three workers each scheduled job is
-queued three times at the same moment; `asynq.Unique(d)` lets only the first through. Pick `d`
-shorter than the time between runs (an hour for a daily job, 30 minutes for an hourly one), or it
-blocks the next run too. A scheduled job still has to be safe to run twice: `Unique` stops
-duplicates only until the first copy succeeds or `d` is up.
+Each feature's schedule function (`taskSchedules`) returns its jobs that run on a timetable, as
+`queue.Schedule`s with cron specs in UTC (`"@daily"`, `"0 3 * * *"`). Every worker process runs a
+scheduler, so with three workers each scheduled job is queued three times at the same moment;
+`Unique` (required) lets only the first through. Pick it shorter than the time between runs (an
+hour for a daily job, 30 minutes for an hourly one), or it blocks the next run too. A scheduled
+job still has to be safe to run twice: `Unique` stops duplicates only until the first copy
+succeeds or its time is up.
+
+## What any queue can do
+
+The queue may change (SQS, say), so jobs rely only on what most queues offer:
+
+- **At least once.** Every queue may deliver a job twice; see [above](#every-job-can-run-twice).
+- **Small payloads**: under 256 KB (SQS's limit). Put IDs in them, not files or long lists.
+- **Delays up to 15 minutes** (SQS's limit), once delayed jobs are needed; anything later is a
+  schedule, or a row with a due time that a scheduled job picks up.
+- **Time limits and `Unique` in whole seconds.**
+- **Retries per job, with the queue's own delays.** `MaxRetries` is set per job; SQS sets it per
+  queue (`maxReceiveCount`), so an SQS implementation would read it from the job and give up
+  itself. The delay between tries is the queue's (asynq: seconds at first, then growing).
+- **Timetables come from our code** (`queue.Schedule`), since not every queue has a scheduler.
+- **Whether a failed run is retried is the queue's rule**, not ours: asynq retries a run past its
+  time limit whatever it returned, and puts back one cut off by shutdown without counting it.
+  `queue.Run.WillRetry` tells the log line what the queue will do.
 
 ## Big tables
 
@@ -149,16 +170,17 @@ so no statement holds locks for long, and add an index that matches the conditio
 ## Tests
 
 - Job handlers are tested by calling the real mux (`testWorker(t)`: the real handlers and services
-  on a database of the test's own) with a real `asynq.Task`, then checking the returned error **and
-  the rows**. No Valkey needed.
-- An error that must not be retried is checked with `errors.Is(err, asynq.SkipRetry)`.
+  on a database of the test's own) with `mux.Process(ctx, jobType, payload)`, then checking the
+  returned error **and the rows**. No Valkey needed.
+- An error that must not be retried is checked with `errors.Is(err, queue.ErrNoRetry)`.
 - Code that queues jobs is tested against a real Valkey (`internal/testqueue`), the job looked up by
   its ID and checked, then deleted (`testqueue.Take`).
-- A scheduled job's entry (cron spec, payload, `Unique`) is checked with
-  `scheduledEntries(t, jobType)` (`internal/worker/main_test.go`), which runs the real scheduler and
-  returns only that job type's entries.
-- The worker's own behaviour (log lines, retries) is tested by running a real asynq server on a
-  queue of the test's own (`TestLogJobs`).
+- A scheduled job is checked in the list `Schedules` returns (spec, job, `Unique`); `cmd/worker`'s
+  test checks that the queue it runs on accepts every schedule.
+- The log line is checked for each kind of run (`TestLogJobs`), and on a real server for the runs
+  the queue decides (past the time limit, cut off by shutdown: `TestLogJobsOnTheQueue`). That the
+  queue does what `queue.Run` says (retries, the scheduler's `Unique`) is checked in the
+  implementation's own tests (`internal/queue/valkey`).
 
 ## Running
 

@@ -78,32 +78,30 @@ linters:
             - pkg: github.com/jackc/pgx/v5
               desc: recognise database errors through internal/postgres; map pgtype types to Go types in sqlc.yaml
         queue-library:
-          # Tests may use them to read what was queued. startup opens the connection, testqueue
-          # gives tests theirs, and the worker runs jobs on asynq's server and scheduler itself.
+          # Tests may use them to read what was queued. startup opens the connection and testqueue
+          # gives tests theirs.
           files:
             - $all
             - "!$test"
             - "!**/internal/queue/valkey/*.go"
             - "!**/internal/startup/*.go"
             - "!**/internal/testqueue/*.go"
-            - "!**/internal/worker/*.go"
           deny:
             - pkg: github.com/hibiken/asynq
-              desc: queue jobs through internal/queue
+              desc: queue and run jobs through internal/queue
             - pkg: github.com/redis/go-redis
-              desc: queue jobs through internal/queue
+              desc: queue and run jobs through internal/queue
         queue-implementation:
-          # Only the programs pick the implementation; the worker also builds its asynq tasks with it.
-          # Elsewhere its asynq types would get past the rule above.
+          # Only the programs pick the implementation. Elsewhere its asynq types would get past the
+          # rule above.
           files:
             - $all
             - "!$test"
             - "!**/cmd/**/*.go"
             - "!**/internal/queue/valkey/*.go"
-            - "!**/internal/worker/*.go"
           deny:
             - pkg: github.com/mdayat/go-template/internal/queue/valkey
-              desc: use the queue.Enqueuer passed in from cmd/
+              desc: use the internal/queue types passed in from cmd/
     # Without these it only checks database/sql and stays silent on pgx. (sqlclosecheck isn't
     # enabled: it doesn't catch unclosed pgx rows either way.)
     rowserrcheck:

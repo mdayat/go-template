@@ -14,6 +14,8 @@ import (
 
 	"github.com/mdayat/go-template/internal/config"
 	"github.com/mdayat/go-template/internal/db"
+	"github.com/mdayat/go-template/internal/jobs"
+	"github.com/mdayat/go-template/internal/queue/valkey"
 	"github.com/mdayat/go-template/internal/startup"
 	"github.com/mdayat/go-template/internal/worker"
 )
@@ -56,18 +58,29 @@ func run() error {
 	}
 	defer pool.Close()
 
-	queue, err := startup.ConnectRedis(ctx, cfg.redisURL)
+	redisClient, err := startup.ConnectRedis(ctx, cfg.redisURL)
 	if err != nil {
 		return err
 	}
-	defer queue.Close()
+	defer redisClient.Close()
 
-	scheduler, err := worker.NewScheduler(queue, log.Logger)
+	schedules, err := worker.Schedules()
 	if err != nil {
 		return err
 	}
-	server := worker.NewServer(queue, log.Logger)
-	if err := server.Start(worker.NewMux(log.Logger, worker.NewServices(db.New(pool)))); err != nil {
+	scheduler, err := valkey.NewScheduler(redisClient, log.Logger, schedules)
+	if err != nil {
+		return err
+	}
+	server, err := valkey.NewServer(redisClient, worker.NewMux(log.Logger, worker.NewServices(db.New(pool))), valkey.ServerOptions{
+		Queues:          []string{jobs.Queue},
+		ShutdownTimeout: worker.ShutdownTimeout,
+		Logger:          log.Logger,
+	})
+	if err != nil {
+		return err
+	}
+	if err := server.Start(); err != nil {
 		return fmt.Errorf("start job server: %w", err)
 	}
 	if err := scheduler.Start(); err != nil {

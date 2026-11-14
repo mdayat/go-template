@@ -80,9 +80,9 @@ func TestEnqueueRefusesBadJobs(t *testing.T) {
 	for _, tt := range tests {
 		job := valid
 		tt.change(&job)
-		// The scheduler takes NewTask's task without asynq's queueing checks.
-		if _, err := NewTask(job); err == nil {
-			t.Errorf("%s: NewTask(%+v) error = nil, want one", tt.name, job)
+		// The scheduler takes newTask's task without asynq's queueing checks.
+		if _, err := newTask(job); err == nil {
+			t.Errorf("%s: newTask(%+v) error = nil, want one", tt.name, job)
 		}
 		if id, err := enqueuer.Enqueue(t.Context(), job); err == nil {
 			t.Errorf("%s: Enqueue(%+v) = %q, want an error", tt.name, job, id)
