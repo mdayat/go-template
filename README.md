@@ -29,7 +29,8 @@ jobs. Keep both, one or neither: see [Choose what you need](#choose-what-you-nee
 | `AGENTS.md` | the same rules in short, for AI coding tools (`CLAUDE.md` loads it) |
 | `tools/go.mod` | pinned versions of golangci-lint, sqlc and govulncheck, kept out of the app's `go.mod` |
 | `Dockerfile` | each program's image, and a `migrate` image that applies migrations |
-| `.github/workflows` | CI: generated files up to date, lint, vulnerabilities, tests, images build |
+| `.github/workflows` | CI: generated files up to date, versions agree, lint, vulnerabilities, tests, images build |
+| `.github/dependabot.yml` | pull requests for newer dependencies, when you ask (and once a quarter) |
 
 <!-- remove:api -->
 ### The HTTP API
@@ -103,6 +104,7 @@ jobs. Keep both, one or neither: see [Choose what you need](#choose-what-you-nee
 | `make generate` | regenerate `internal/db` from `db/queries` |
 | `make migrate-apply` | apply migrations to `DATABASE_URL` |
 | `make check-generated` | fail if generated code, `atlas.sum` or migrations are out of date |
+| `make check-versions` | fail if Go's or Atlas's version differs between the places it's pinned |
 | `make vuln` | known vulnerabilities in dependencies |
 | `make image` | build each program's image and the migrate image |
 | `make test-db-clean` | drop databases that failed tests kept for inspection |
@@ -116,6 +118,24 @@ jobs. Keep both, one or neither: see [Choose what you need](#choose-what-you-nee
 
 Before you push: `make fmt lint test check-generated`. The database workflow is in
 [docs/standards/database.md](docs/standards/database.md).
+
+### Keeping dependencies up to date
+
+Run Dependabot when you want updates: on GitHub, **Insights → Dependency graph → Dependabot →
+Check for updates** (it also runs once a quarter, in case nobody does). Each run opens at most
+three pull requests, one each for Go modules (the app's and the tools'), GitHub Actions and the
+Dockerfile's base images; merge each once CI passes, or close it to skip. When one update in a
+pull request breaks CI (a new lint rule, a changed API), fix the code in that pull request, or add
+the dependency to `ignore` in `.github/dependabot.yml` and check for updates again. Known security
+holes don't wait for Dependabot: `make vuln`, in CI, fails on them. Two versions are changed by
+hand, everywhere at once (`make check-versions`, run by CI, fails until they agree):
+
+- **Go:** the `go` line in `go.mod` and `tools/go.mod`, and the Dockerfile's `golang` image.
+  Dependabot's pull request for a newer `golang` image is the reminder; `make vuln` also reports
+  a known hole in the Go version in use.
+- **Atlas:** the Dockerfile's `arigaio/atlas` image, and `ATLAS_VERSION` with `ATLAS_SHA256` in
+  `.github/workflows/code_quality_checks.yaml` (the checksum of the file CI downloads, from
+  `shasum -a 256`).
 
 ## Replacing the example
 

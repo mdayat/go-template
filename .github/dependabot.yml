@@ -1,0 +1,36 @@
+# Dependabot opens pull requests for newer dependencies; CI checks each one like any change. Each
+# run opens at most one pull request per kind below (every update grouped, major ones included).
+# The schedule is only a safety net: run it any time from the repository's Insights → Dependency
+# graph → Dependabot → Check for updates.
+version: 2
+updates:
+  # The app's modules and the pinned tools (golangci-lint, sqlc, govulncheck).
+  - package-ecosystem: gomod
+    directories: ["/", "/tools"]
+    schedule:
+      interval: quarterly
+    groups:
+      go-modules:
+        patterns: ["*"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: quarterly
+    groups:
+      github-actions:
+        patterns: ["*"]
+
+  # Base images in the Dockerfile. A newer golang image is how a new Go release shows up: its pull
+  # request fails make check-versions until go.mod and tools/go.mod name the same version.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: quarterly
+    groups:
+      docker-images:
+        patterns: ["*"]
+    ignore:
+      # Also pinned with its checksum in CI's install step, which Dependabot can't update: bump
+      # both by hand (make check-versions compares them).
+      - dependency-name: arigaio/atlas

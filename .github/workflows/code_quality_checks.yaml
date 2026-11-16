@@ -63,8 +63,11 @@ jobs:
         run: for part in $REMOVE; do make remove what=$part; done
       # remove:end
 
+      - name: Check versions pinned in two places agree
+        run: make check-versions
+
       # Pinned by version and checksum, Community edition. Keep the version equal to the migrate
-      # image's in the Dockerfile.
+      # image's in the Dockerfile (make check-versions compares them).
       - name: Install Atlas
         env:
           ATLAS_VERSION: v1.3.0

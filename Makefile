@@ -19,7 +19,7 @@ export DATABASE_URL ?= $(shell sed -nE 's/^(export[[:space:]]+)?DATABASE_URL=//p
 	| sed -E -e "s/^\"([^\"]*)\".*/\1/;t" -e "s/^'([^']*)'.*/\1/;t" -e "s/[[:space:]]+$(HASH).*//" -e "s/[[:space:]]+$$//")
 
 .PHONY: fmt lint test test-db-clean vuln build rename image image-migrate db-up db-down generate \
-	check-generated migrate-diff migrate-apply
+	check-generated check-versions migrate-diff migrate-apply
 
 fmt:
 	$(TOOL) golangci-lint fmt ./...
@@ -122,6 +122,19 @@ check-generated:
 		echo "$$out"; echo "db/schema.sql differs from db/migrations: make migrate-diff name=<what_changed>"; exit 1; }
 	go mod tidy -diff
 	cd tools && go mod tidy -diff
+
+# Fails if a version pinned in two places differs, so an update (by hand or by Dependabot) changes
+# both: Go in go.mod, tools/go.mod and the Dockerfile's build image; Atlas in the Dockerfile's
+# migrate image and CI's install step.
+check-versions:
+	@go=$$(sed -n 's/^go //p' go.mod); tools=$$(sed -n 's/^go //p' tools/go.mod); \
+		image=$$(sed -nE 's/^FROM .*golang:([0-9.]+)-.*/\1/p' Dockerfile); \
+		[ -n "$$go" ] && [ "$$tools" = "$$go" ] && [ "$$image" = "$$go" ] || { \
+		echo "Go versions differ: go.mod $$go, tools/go.mod $$tools, Dockerfile golang:$$image. Use one in all three."; exit 1; }
+	@image=$$(sed -nE 's/^FROM .*atlas:([0-9.]+)-.*/\1/p' Dockerfile); \
+		ci=$$(sed -nE 's/^ *ATLAS_VERSION: v([0-9.]+).*/\1/p' .github/workflows/code_quality_checks.yaml); \
+		[ -n "$$image" ] && [ "$$image" = "$$ci" ] || { \
+		echo "Atlas versions differ: Dockerfile atlas:$$image, CI ATLAS_VERSION v$$ci. Use one in both (and CI's ATLAS_SHA256)."; exit 1; }
 
 # Write a migration for the difference between db/schema.sql and db/migrations (needs Docker).
 migrate-diff:
