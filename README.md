@@ -205,7 +205,7 @@ Build the images with `make image` (on an arm64 Mac, for amd64 servers:
 <!-- remove:api -->
 The API serves `GET /healthz` on port 8080: point the platform's health check at it. The image
 has no shell, so a Docker `HEALTHCHECK` can't run inside it. On SIGTERM the API refuses new
-requests, gives running ones up to 15 s, then closes whatever is left and exits.
+requests, gives running ones up to 8 s, then closes whatever is left and exits.
 
 <!-- remove:end -->
 <!-- remove:worker -->

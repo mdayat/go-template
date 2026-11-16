@@ -15,8 +15,8 @@ import (
 )
 
 // ShutdownTimeout is how long running jobs get to finish after SIGTERM; the queue then puts the
-// ones still running back. Below the 10 s most platforms (Docker included) wait before they kill
-// the process.
+// ones still running back. Below Docker's default 10 s between SIGTERM and a hard kill, the
+// shortest common wait (Kubernetes and ECS: 30 s).
 const ShutdownTimeout = 8 * time.Second
 
 // Services holds what the job handlers call, one field per feature. A new feature adds its field

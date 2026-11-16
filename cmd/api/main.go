@@ -22,8 +22,10 @@ import (
 	"github.com/mdayat/go-template/internal/startup"
 )
 
-// Long enough for in-flight requests to finish (WriteTimeout caps each one).
-const shutdownTimeout = 15 * time.Second
+// At least api.RequestTimeout, so every request still running has had its full time when its
+// connection is closed; below Docker's default 10 s between SIGTERM and a hard kill (the shortest
+// common wait), so the API closes what's left itself. TestShutdownTimeout checks both.
+const shutdownTimeout = 8 * time.Second
 
 // buildVersion is set at build time with -ldflags "-X main.buildVersion=...", for builds that can't
 // see .git (the Docker build).

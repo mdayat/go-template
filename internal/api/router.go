@@ -19,15 +19,15 @@ import (
 const (
 	healthPath = "/healthz"
 
-	// requestTimeout is how long a request's context lives. The server's WriteTimeout (cmd/api) cuts
-	// a slow reply's connection but doesn't cancel its context, so without this a query stuck on a
-	// lock runs on and holds its database connection. Kept below WriteTimeout (10 s) so the 503
-	// reply still reaches the client.
-	requestTimeout = 8 * time.Second
-
 	// defaultPageSize is a list's page size when the request has no ?limit=.
 	defaultPageSize = 20
 )
+
+// RequestTimeout is how long a request's context lives. The server's WriteTimeout (cmd/api) cuts a
+// slow reply's connection but doesn't cancel its context, so without this a query stuck on a lock
+// runs on and holds its database connection. Kept below WriteTimeout (10 s) so the 503 reply still
+// reaches the client. Exported for cmd/api, whose shutdown wait must not be shorter.
+const RequestTimeout = 8 * time.Second
 
 // remove:worker
 // jobResponse is the reply of every endpoint that queues a job (202 Accepted): the job's ID, for
@@ -91,7 +91,7 @@ func newBaseRouter(logger zerolog.Logger) *chi.Mux {
 		logRequests,
 		// After logRequests: its own context has no deadline, so a timed-out request is logged as
 		// the 503 it got, not as a client that hung up (499).
-		limitRequestTime(requestTimeout),
+		limitRequestTime(RequestTimeout),
 		// HTTP requires HEAD wherever GET works; uptime checkers and load balancers use it.
 		middleware.GetHead,
 	)

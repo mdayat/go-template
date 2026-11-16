@@ -258,7 +258,7 @@ func TestRequestsHaveATimeLimit(t *testing.T) {
 	router := newBaseRouter(zerolog.Nop())
 	router.Get("/deadline", func(w http.ResponseWriter, r *http.Request) {
 		deadline, ok := r.Context().Deadline()
-		if !ok || time.Until(deadline) > requestTimeout {
+		if !ok || time.Until(deadline) > RequestTimeout {
 			w.WriteHeader(http.StatusInternalServerError)
 		}
 	})
@@ -267,7 +267,7 @@ func TestRequestsHaveATimeLimit(t *testing.T) {
 	router.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/deadline", nil))
 
 	if rec.Code != http.StatusOK {
-		t.Errorf("status = %d, want 200: the request's context has no deadline of at most %s", rec.Code, requestTimeout)
+		t.Errorf("status = %d, want 200: the request's context has no deadline of at most %s", rec.Code, RequestTimeout)
 	}
 }
 

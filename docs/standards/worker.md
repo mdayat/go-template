@@ -94,8 +94,8 @@ counts as failed; asynq retries it while attempts are left, whatever the handler
 `apperr` kind included).
 
 On SIGTERM the worker stops its scheduler, stops taking jobs, and gives running ones 8 s to finish
-(`ShutdownTimeout` in `internal/worker/worker.go`, below the 10 s most platforms wait before a hard
-kill). Jobs still running then are put back in the queue and their contexts cancelled, which stops
+(`ShutdownTimeout` in `internal/worker/worker.go`, below Docker's default 10 s before a hard
+kill, the shortest common wait). Jobs still running then are put back in the queue and their contexts cancelled, which stops
 their queries. They run again on the next worker, from the start.
 
 ## Logging

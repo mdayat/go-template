@@ -76,12 +76,14 @@ headers the handler had set that describe a body (`Content-Encoding`, `Cache-Con
 
 Connection timeouts are set in `cmd/api/main.go` (read header 5 s, read 10 s, write 10 s, idle
 120 s). Those cut a slow connection but don't stop the handler, so each request's context also
-ends after 8 s (`requestTimeout` in `internal/api/router.go`): its queries are cancelled and the
+ends after 8 s (`RequestTimeout` in `internal/api/router.go`): its queries are cancelled and the
 caller gets a 503, "the request took too long". Pass `r.Context()` to everything a handler calls,
 or the time limit can't stop it.
 
-On SIGTERM the server stops taking new requests and waits up to 15 s for running ones. Any still
-running then have their connections closed, which cancels their contexts, and the process exits.
+On SIGTERM the server stops taking new requests and waits up to 8 s for running ones
+(`shutdownTimeout` in `cmd/api/main.go`): each request's context has ended by then, and it's below
+Docker's default 10 s before a hard kill, the shortest common wait. Any still running then have
+their connections closed, and the process exits.
 
 Work that takes long and doesn't need to finish before the reply (a report, sending email)
 doesn't belong in a request: it runs after the reply, outside the request.
