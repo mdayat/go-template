@@ -79,6 +79,20 @@ linters:
           deny:
             - pkg: github.com/jackc/pgx/v5
               desc: recognise database errors through internal/postgres; map pgtype types to Go types in sqlc.yaml
+        # remove:api
+        jwt-library:
+          # Tests may use it to make tokens. The test issuer signs them, also for make dev-token.
+          files:
+            - $all
+            - "!$test"
+            - "!**/internal/auth/jwks/*.go"
+            - "!**/internal/authtest/*.go"
+          deny:
+            - pkg: github.com/golang-jwt/jwt
+              desc: check tokens through the api.Authenticator that cmd/api passes in
+            - pkg: github.com/MicahParks
+              desc: check tokens through the api.Authenticator that cmd/api passes in
+        # remove:end
         # remove:worker
         queue-library:
           # Tests may use them to read what was queued. startup opens the connection and testqueue

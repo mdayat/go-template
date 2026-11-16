@@ -65,15 +65,19 @@ func NewServices(
 	}
 }
 
-// NewRouter returns the API's routes, each request logged to logger.
-func NewRouter(logger zerolog.Logger, services Services) *chi.Mux {
+// NewRouter returns the API's routes, each request logged to logger. Every route but the health
+// check needs someone signed in, as authn says.
+func NewRouter(logger zerolog.Logger, services Services, authn Authenticator) *chi.Mux {
 	router := newBaseRouter(logger)
 	// One decoder for every feature: the validator caches what it learns about each type.
 	decoder := newBodyDecoder()
-	taskRoutes{tasks: services.Tasks, decoder: decoder}.mount(router)
-	// remove:worker
-	purgeRoutes{jobs: services.Jobs, decoder: decoder}.mount(router)
-	// remove:end
+	router.Group(func(r chi.Router) {
+		r.Use(authenticate(authn))
+		taskRoutes{tasks: services.Tasks, decoder: decoder}.mount(r)
+		// remove:worker
+		purgeRoutes{jobs: services.Jobs, decoder: decoder}.mount(r)
+		// remove:end
+	})
 	return router
 }
 

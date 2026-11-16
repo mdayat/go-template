@@ -38,7 +38,9 @@ jobs. Keep both, one or neither: see [Choose what you need](#choose-what-you-nee
 | Path | What |
 |---|---|
 | `cmd/api` | the HTTP server: settings, Postgres pool, timeouts, clean shutdown on SIGTERM |
-| `internal/api` | routes, one JSON log line per request, [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) error replies, JSON body reading |
+| `internal/api` | routes, one JSON log line per request, [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) error replies, JSON body reading, sign-in on every route but the health check |
+| `internal/auth` | who signed in, as a provider proved it; `internal/auth/jwks` checks JWTs against the issuer's published keys (Firebase, Auth0, Cognito, Keycloak, Supabase; see [signing in](docs/standards/http-api.md#signing-in)) |
+| `internal/authtest`, `scripts/devtoken` | a stand-in sign-in provider: for tests, and for local runs (`make dev-token`) |
 | `docs/standards/http-api.md` | [the HTTP API's rules](docs/standards/http-api.md) |
 
 <!-- remove:end -->
@@ -87,7 +89,9 @@ jobs. Keep both, one or neither: see [Choose what you need](#choose-what-you-nee
    If another Postgres already uses port 5432, change `POSTGRES_PORT` and the port in
    `DATABASE_URL` and `TEST_DATABASE_URL` in `.env`.
    <!-- remove:api -->
-   - Start the API with `make run`, then open http://localhost:8080/healthz.
+   - Run `make dev-token user=alice` once: it makes the local sign-in key the API needs, and prints
+     a token. Start the API with `make run`, then open http://localhost:8080/healthz; every other
+     route needs `Authorization: Bearer <token>`.
    <!-- remove:end -->
    <!-- remove:worker -->
    - Start the worker with `make run-worker` (in another terminal). For another Redis on port
@@ -111,6 +115,7 @@ jobs. Keep both, one or neither: see [Choose what you need](#choose-what-you-nee
 
 <!-- remove:api -->
 - `make run`: run the API.
+- `make dev-token user=alice`: a sign-in token for calling the local API.
 <!-- remove:end -->
 <!-- remove:worker -->
 - `make run-worker`: run the worker.
@@ -226,6 +231,13 @@ Build the images with `make image` (on an arm64 Mac, for amd64 servers:
 The API serves `GET /healthz` on port 8080: point the platform's health check at it. The image
 has no shell, so a Docker `HEALTHCHECK` can't run inside it. On SIGTERM the API refuses new
 requests, gives running ones up to 8 s, then closes whatever is left and exits.
+
+Set `AUTH_JWKS_URL`, `AUTH_ISSUER` and `AUTH_AUDIENCE` to your sign-in provider's (an https://
+keys URL that answers 200 itself, not a redirect; the API refuses anything else in production).
+Each copy of the API fetches the keys at start (up to 5 s) and every hour; if the provider can't
+be reached at start, the API still starts and answers 503 to signed-in routes until it has them
+(it tries again when a token naming a key arrives, at most every 5 minutes, else at the hourly
+fetch).
 
 <!-- remove:end -->
 <!-- remove:worker -->

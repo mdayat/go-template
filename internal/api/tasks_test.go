@@ -3,6 +3,7 @@ package api
 import (
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"slices"
 	"strings"
@@ -66,6 +67,27 @@ func tasksInDB(t *testing.T, pool *pgxpool.Pool) []db.Task {
 
 func asReply(row db.Task) taskResponse {
 	return taskResponse{ID: row.ID, Title: row.Title, Done: row.Done, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt}
+}
+
+// The tasks routes are behind the sign-in check (its cases are in auth_test.go).
+func TestTasksNeedSignIn(t *testing.T) {
+	t.Parallel()
+	router, _ := testAPI(t)
+
+	for _, route := range []struct{ method, target string }{
+		{http.MethodGet, "/tasks"},
+		{http.MethodPost, "/tasks"},
+		{http.MethodPost, "/tasks/" + uuid.NewString() + "/restore"},
+	} {
+		req := httptest.NewRequestWithContext(t.Context(), route.method, route.target, nil)
+		req.Header.Set("Authorization", "Bearer not-a-token")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusUnauthorized {
+			t.Errorf("%s %s without a valid token = %d, want 401", route.method, route.target, rec.Code)
+		}
+	}
 }
 
 func TestCreateTask(t *testing.T) {

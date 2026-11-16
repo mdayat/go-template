@@ -25,7 +25,9 @@ Two rules hold everything up:
 | `apperr.Conflict(detail)` | clashes with current state (a duplicate) |
 
 <!-- remove:api -->
-The HTTP API replies 400, 422, 404 and 409 for them.
+The HTTP API replies 400, 422, 404 and 409 for them. It has one more kind,
+`apperr.Unauthenticated(detail)`: no one is signed in, or their token was refused (401). Its detail
+never says why a token was refused; wrap the cause, so it reaches the log line only.
 
 <!-- remove:end -->
 - `detail` and each field's message are **shown to the caller**, so they never hold internal

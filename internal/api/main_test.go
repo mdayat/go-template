@@ -12,7 +12,10 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog"
 
+	"github.com/mdayat/go-template/internal/auth/jwks"
+	"github.com/mdayat/go-template/internal/authtest"
 	"github.com/mdayat/go-template/internal/db"
+	"github.com/mdayat/go-template/internal/httpclient"
 	"github.com/mdayat/go-template/internal/queue/valkey"
 	"github.com/mdayat/go-template/internal/testdb"
 	"github.com/mdayat/go-template/internal/testqueue"
@@ -26,7 +29,8 @@ func TestMain(m *testing.M) {
 }
 
 // testAPI returns the real router and every feature's service, built by NewServices as in the app,
-// on a database of the test's own. Every endpoint test uses it.
+// on a database of the test's own. Every endpoint test uses it. Requests are signed in as
+// testSubject unless they carry their own Authorization header, through the real token check.
 func testAPI(t *testing.T) (http.Handler, *pgxpool.Pool) {
 	t.Helper()
 	pool := testdb.New(t)
@@ -36,7 +40,33 @@ func testAPI(t *testing.T) (http.Handler, *pgxpool.Pool) {
 		valkey.NewEnqueuer(testqueue.New(t)), // the test job queue
 		// remove:end
 	)
-	return NewRouter(zerolog.Nop(), services), pool
+	authn, issuer := testAuthenticator(t)
+	return signedIn(NewRouter(zerolog.Nop(), services, authn), issuer.Token(testSubject)), pool
+}
+
+// testSubject is who testAPI's requests are signed in as.
+const testSubject = "test-user"
+
+// testAuthenticator returns the real token check (internal/auth/jwks), trusting a test issuer of
+// the test's own.
+func testAuthenticator(t *testing.T) (*jwks.Authenticator, *authtest.Issuer) {
+	t.Helper()
+	issuer := authtest.NewIssuer(t)
+	authn, err := jwks.New(t.Context(), issuer.Config(), httpclient.New(5*time.Second), zerolog.Nop())
+	if err != nil {
+		t.Fatalf("jwks.New() error = %v", err)
+	}
+	return authn, issuer
+}
+
+// signedIn sends each request with token unless the request already has an Authorization header.
+func signedIn(next http.Handler, token string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") == "" {
+			r.Header.Set("Authorization", "Bearer "+token)
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // Helpers shared by every feature's endpoint tests live here, not in a feature's test file, so

@@ -151,6 +151,12 @@ implementation and passes it in. Changing provider is then a new implementation 
 | `queue.Enqueuer` queues a job; handlers on a `queue.Mux` run it | `internal/queue` | `internal/queue/valkey` (`Enqueuer`; `Server` and `Scheduler` run a `Mux` and `Schedule`s), on asynq | each program that queues or runs jobs |
 | `worker.EventSender`: tells another system about an event | `internal/worker` | `webhook.HTTPSender`, `webhook.Discard` | `cmd/worker` |
 <!-- remove:end -->
+<!-- remove:api -->
+
+| Interface | Defined in | Implementations | Picked in |
+|---|---|---|---|
+| `api.Authenticator`: who a request's token belongs to | `internal/api` | `internal/auth/jwks`: JWTs checked against the issuer's published keys | `cmd/api` |
+<!-- remove:end -->
 
 These are design patterns, and their names help when reading or adding one
 ([examples in Go](https://refactoring.guru/design-patterns/go)): each implementation is a

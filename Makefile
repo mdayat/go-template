@@ -80,7 +80,7 @@ image-migrate:
 	docker build --target migrate -t $(IMAGE)-migrate .
 
 # remove:api
-.PHONY: image-api run
+.PHONY: image-api run dev-token
 image: image-api
 
 image-api:
@@ -88,6 +88,11 @@ image-api:
 
 run:
 	go run ./cmd/api
+
+# Print a sign-in token for calling the local API (user=alice; default dev-user). The first run
+# makes the signing key in .dev/ that the API needs to start: Authorization: Bearer <token>.
+dev-token:
+	@go run ./scripts/devtoken "$(user)"
 # remove:end
 
 # remove:worker

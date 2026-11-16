@@ -26,7 +26,11 @@ import (
 // parts are what make remove can take out, each with the folders and files that are only its own.
 func parts() map[string][]string {
 	return map[string][]string{
-		"api": {"cmd/api", "internal/api", "docs/standards/http-api.md"},
+		"api": {
+			"cmd/api", "internal/api", "docs/standards/http-api.md",
+			// Signing in exists for the API's routes; nothing else checks tokens.
+			"internal/auth", "internal/authtest", "scripts/devtoken",
+		},
 		// Without a worker nothing runs queued jobs, so the queue goes too: an endpoint would queue
 		// jobs that never run.
 		"worker": {
@@ -44,7 +48,10 @@ func parts() map[string][]string {
 // Matching is plain and case-sensitive, so each spelling is listed.
 func mentions() map[string][]string {
 	return map[string][]string{
-		"api": {"cmd/api", "internal/api", "http-api.md", "HTTP_ADDR", "testAPI", "/healthz"},
+		"api": {
+			"cmd/api", "internal/api", "http-api.md", "HTTP_ADDR", "testAPI", "/healthz",
+			"internal/auth", "devtoken", "dev-token", "AUTH_JWKS_URL", "AUTH_ISSUER", "AUTH_AUDIENCE",
+		},
 		"worker": {
 			"cmd/worker", "internal/worker", "internal/jobs", "internal/queue", "testqueue", "worker.md",
 			"testWorker", "run-worker", "REDIS_URL", "PURGE_WEBHOOK_URL", "deleted-row-purges",

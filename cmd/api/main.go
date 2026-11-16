@@ -16,8 +16,10 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/mdayat/go-template/internal/api"
+	"github.com/mdayat/go-template/internal/auth/jwks"
 	"github.com/mdayat/go-template/internal/config"
 	"github.com/mdayat/go-template/internal/db"
+	"github.com/mdayat/go-template/internal/httpclient"
 	"github.com/mdayat/go-template/internal/queue/valkey"
 	"github.com/mdayat/go-template/internal/startup"
 )
@@ -26,6 +28,9 @@ import (
 // connection is closed; below Docker's default 10 s between SIGTERM and a hard kill (the shortest
 // common wait), so the API closes what's left itself. TestShutdownTimeout checks both.
 const shutdownTimeout = 8 * time.Second
+
+// authKeysTimeout is how long one fetch of the sign-in provider's keys may take.
+const authKeysTimeout = 5 * time.Second
 
 // buildVersion is set at build time with -ldflags "-X main.buildVersion=...", for builds that can't
 // see .git (the Docker build).
@@ -79,8 +84,14 @@ func run() error {
 		valkey.NewEnqueuer(redisClient),
 		// remove:end
 	)
+	// Fetches the provider's keys now and hourly until ctx ends; a provider that can't be reached
+	// doesn't stop the API starting (requests needing sign-in get a 503 until the keys arrive).
+	authn, err := jwks.New(ctx, cfg.auth, httpclient.New(authKeysTimeout), log.Logger)
+	if err != nil {
+		return err
+	}
 	server := &http.Server{
-		Handler:           api.NewRouter(log.Logger, services),
+		Handler:           api.NewRouter(log.Logger, services, authn),
 		ErrorLog:          api.ServerErrorLog(log.Logger),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,

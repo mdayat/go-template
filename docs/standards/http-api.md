@@ -63,6 +63,35 @@ answers HEAD (HTTP requires it; uptime checkers use it). An error reply drops an
 headers the handler had set that describe a body (`Content-Encoding`, `Cache-Control`, `ETag`,
 ...), since they'd misdescribe the problem.
 
+## Signing in
+
+Every route but `/healthz` needs someone signed in: the request carries
+`Authorization: Bearer <token>`, and `authenticate` (`internal/api/auth.go`) asks the
+`Authenticator` that `cmd/api` passed in whose token it is.
+
+| The token | Reply |
+|---|---|
+| missing, another scheme, or refused (forged, expired, for another service) | 401 with `WWW-Authenticate: Bearer`, the same detail whatever was wrong; the reason is on the log line |
+| can't be checked (the provider's keys never arrived) | 503: our outage, which a client may retry |
+
+The provider only proves who someone is; what they may do is decided on our own data, never on
+the token's claims, so changing provider changes no rule. The template's provider is
+`internal/auth/jwks`: JWTs checked against the keys their issuer publishes (`AUTH_JWKS_URL`,
+`AUTH_ISSUER`, `AUTH_AUDIENCE` in `.example.env`). It covers Firebase, Auth0, Cognito, Keycloak and
+Supabase, given tokens that name this service in `aud` and are signed RS256 or ES256: Cognito's
+ID tokens (its access tokens have no `aud`), Keycloak with an audience mapper. Another kind
+(opaque tokens looked up in a table, say) is another
+package with an `Authenticate(ctx, token)` method, picked in `cmd/api`; handlers and services
+don't change.
+
+- For local runs, `make dev-token user=alice` prints a token the local API accepts; run it before
+  the API's first start, which needs the key it makes. The API refuses its keys in production.
+- A route that must stay open (a webhook from another service) goes outside the `authenticate`
+  group in `NewRouter`, and checks its caller its own way.
+- Endpoint tests sign in through the real check: `testAPI` signs every request in as
+  `testSubject`, with a token from a test issuer (`internal/authtest`), unless the test sets its
+  own `Authorization` header.
+
 ## IDs and paging
 
 - An ID that isn't a valid UUID is a 404, the same as an unknown one: it can't name anything.

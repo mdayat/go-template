@@ -82,7 +82,9 @@ func TestPurgeDeletedRowsQueueDownIs500(t *testing.T) {
 	// Nothing listens on port 1.
 	down := redis.NewClient(&redis.Options{Addr: "localhost:1", MaxRetries: -1})
 	t.Cleanup(func() { _ = down.Close() })
-	router := NewRouter(zerolog.Nop(), NewServices(db.New(testdb.New(t)), valkey.NewEnqueuer(down)))
+	authn, issuer := testAuthenticator(t)
+	router := signedIn(NewRouter(zerolog.Nop(), NewServices(db.New(testdb.New(t)), valkey.NewEnqueuer(down)), authn),
+		issuer.Token(testSubject))
 
 	rec := send(t, router, http.MethodPost, "/deleted-row-purges", `{"older_than_days":30}`)
 

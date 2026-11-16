@@ -13,6 +13,9 @@ const (
 	KindInvalid                    // the input is readable but breaks a rule; Fields says which
 	KindNotFound
 	KindConflict // the request clashes with current state (a duplicate, a stale version)
+	// remove:api
+	KindUnauthenticated // no one is signed in, or the proof of who it is was refused
+	// remove:end
 )
 
 // Error is an expected failure. Its Detail is safe to show the caller, so it never holds internal
@@ -53,3 +56,13 @@ func NotFound(detail string) error {
 func Conflict(detail string) error {
 	return &Error{Kind: KindConflict, Detail: detail}
 }
+
+// remove:api
+
+// Unauthenticated reports a request from no one signed in. Its detail never says why a proof was
+// refused (expired, forged): that helps an attacker; wrap the cause for the log instead.
+func Unauthenticated(detail string) error {
+	return &Error{Kind: KindUnauthenticated, Detail: detail}
+}
+
+// remove:end

@@ -2,4 +2,8 @@
 !.example*.env
 .DS_Store
 /api
+# remove:api
+# make dev-token's signing key
+.dev/
+# remove:end
 /worker
