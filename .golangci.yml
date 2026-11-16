@@ -79,6 +79,24 @@ linters:
           deny:
             - pkg: github.com/jackc/pgx/v5
               desc: recognise database errors through internal/postgres; map pgtype types to Go types in sqlc.yaml
+        metrics-sdk:
+          # Code that records metrics takes the metric.MeterProvider cmd/ passes in; only telemetry
+          # builds one (and metrictest, for tests). Never OpenTelemetry's global provider: hidden
+          # state that parallel tests would share.
+          files:
+            - $all
+            - "!$test"
+            - "!**/internal/telemetry/*.go"
+            - "!**/internal/metrictest/*.go"
+          deny:
+            - pkg: go.opentelemetry.io/otel/sdk
+              desc: take the metric.MeterProvider passed in (internal/telemetry builds it)
+            - pkg: go.opentelemetry.io/otel/exporters
+              desc: where metrics go is set by OTEL_* settings, read in internal/telemetry
+            - pkg: go.opentelemetry.io/contrib/exporters
+              desc: where metrics go is set by OTEL_* settings, read in internal/telemetry
+            - pkg: go.opentelemetry.io/otel$
+              desc: take the metric.MeterProvider passed in, not OpenTelemetry's global one
         # remove:api
         jwt-library:
           # Tests may use it to make tokens. The test issuer signs them, also for make dev-token.

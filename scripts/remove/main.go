@@ -33,12 +33,14 @@ func parts() map[string][]string {
 			// Signing in and rate limits exist for the API's routes; nothing else checks tokens or
 			// counts requests.
 			"internal/auth", "internal/authtest", "scripts/devtoken", "internal/ratelimit",
+			"local/grafana/dashboards/api.json",
 		},
 		// Without a worker nothing runs queued jobs, so the queue goes too: an endpoint would queue
 		// jobs that never run.
 		"worker": {
 			"cmd/worker", "internal/worker", "internal/jobs", "internal/queue", "internal/testqueue",
 			"docs/standards/worker.md", "internal/api/purge.go", "internal/api/purge_test.go",
+			"local/grafana/dashboards/worker.json",
 		},
 		// A project keeping both parts needs neither the markers nor this tool.
 		"markers": {"scripts/remove"},
@@ -54,10 +56,12 @@ func mentions() map[string][]string {
 			"cmd/api", "internal/api", "http-api.md", "HTTP_ADDR", "testAPI", "/healthz",
 			"internal/auth", "devtoken", "dev-token", "AUTH_JWKS_URL", "AUTH_ISSUER", "AUTH_AUDIENCE",
 			"TRUSTED_PROXIES", "RATE_LIMIT_PER_IP", "RATE_LIMIT_PER_USER", "internal/ratelimit", "redis_rate",
+			"otelhttp", "http.server.request.duration", "api.json",
 		},
 		"worker": {
 			"cmd/worker", "internal/worker", "internal/jobs", "internal/queue", "testqueue", "worker.md",
 			"testWorker", "run-worker", "PURGE_WEBHOOK_URL", "deleted-row-purges", "asynq",
+			"job.run.duration", "worker.json",
 		},
 	}
 }
@@ -74,11 +78,14 @@ func lasts() map[string]string {
 }
 
 func sharedPaths() []string {
-	return []string{"internal/startup/redis.go", "internal/startup/redis_test.go", "internal/testredis"}
+	return []string{
+		"internal/startup/redis.go", "internal/startup/redis_test.go", "internal/testredis",
+		"local/grafana/dashboards/valkey.json",
+	}
 }
 
 func sharedMentions() []string {
-	return []string{"Valkey", "valkey", "VALKEY", "Redis", "redis", "REDIS_URL", "testredis"}
+	return []string{"Valkey", "valkey", "VALKEY", "Redis", "redis", "REDIS_URL", "testredis", "redisotel"}
 }
 
 // templateOnly marks blocks that only the template needs; any run removes them.

@@ -9,6 +9,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog"
+	"go.opentelemetry.io/otel/metric/noop"
 
 	"github.com/mdayat/go-template/internal/db"
 	"github.com/mdayat/go-template/internal/jobs"
@@ -88,7 +89,7 @@ func TestPurgeDeletedRowsQueueDownIs500(t *testing.T) {
 	authn, issuer := testAuthenticator(t)
 	pool := testdb.New(t)
 	testUser(t, pool, true)
-	router := signedIn(NewRouter(zerolog.Nop(), NewServices(db.New(pool), valkey.NewEnqueuer(down)), authn, Limits{}),
+	router := signedIn(NewRouter(zerolog.Nop(), noop.NewMeterProvider(), NewServices(db.New(pool), valkey.NewEnqueuer(down)), authn, Limits{}),
 		issuer.Token(testSubject))
 
 	rec := send(t, router, http.MethodPost, "/deleted-row-purges", `{"older_than_days":30}`)

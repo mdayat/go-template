@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog"
+	"go.opentelemetry.io/otel/metric/noop"
 
 	"github.com/mdayat/go-template/internal/auth/jwks"
 	"github.com/mdayat/go-template/internal/authtest"
@@ -51,7 +52,7 @@ func testAPIWith(t *testing.T, limits Limits) (http.Handler, *pgxpool.Pool, *aut
 		// remove:end
 	)
 	authn, issuer := testAuthenticator(t)
-	return NewRouter(zerolog.Nop(), services, authn, limits), pool, issuer
+	return NewRouter(zerolog.Nop(), noop.NewMeterProvider(), services, authn, limits), pool, issuer
 }
 
 // testSubject is who testAPI's requests are signed in as.

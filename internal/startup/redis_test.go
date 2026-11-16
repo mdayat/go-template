@@ -8,8 +8,13 @@ import (
 	"testing"
 	"time"
 
+	"go.opentelemetry.io/otel/metric/noop"
+
 	"github.com/google/go-cmp/cmp"
 	"github.com/rs/zerolog"
+
+	"github.com/mdayat/go-template/internal/metrictest"
+	"github.com/mdayat/go-template/internal/testenv"
 )
 
 // go-redis reports its own problems through its logger; they must arrive as JSON lines like
@@ -80,7 +85,7 @@ func TestRedisFailFastEndsWithTheRequest(t *testing.T) {
 			t.Cleanup(func() { _ = conn.Close() })
 		}
 	}()
-	client, err := RedisFailFast("redis://"+listener.Addr().String()+"/0", 5*time.Second)
+	client, err := RedisFailFast("redis://"+listener.Addr().String()+"/0", 5*time.Second, "test", noop.NewMeterProvider())
 	if err != nil {
 		t.Fatalf("RedisFailFast() error = %v", err)
 	}
@@ -123,7 +128,7 @@ func TestRedisFailFastDialsOnce(t *testing.T) {
 // must not need Valkey.
 func pingFailFast(t *testing.T, addr string) (time.Duration, error) {
 	t.Helper()
-	client, err := RedisFailFast("redis://"+addr+"/0", 100*time.Millisecond)
+	client, err := RedisFailFast("redis://"+addr+"/0", 100*time.Millisecond, "test", noop.NewMeterProvider())
 	if err != nil {
 		t.Fatalf("RedisFailFast() error = %v", err)
 	}
@@ -131,4 +136,31 @@ func pingFailFast(t *testing.T, addr string) (time.Duration, error) {
 	start := time.Now()
 	err = client.Ping(t.Context()).Err()
 	return time.Since(start), err
+}
+
+// Each command's time and the connections' use are recorded under the client's pool name, so a
+// program's clients (the queue's, the rate limits') are told apart.
+func TestConnectRedisRecordsMetrics(t *testing.T) {
+	t.Parallel()
+	url, err := testenv.Get("TEST_REDIS_URL")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := metrictest.New()
+	client, err := ConnectRedis(t.Context(), url, "queue", rec.Provider)
+	if err != nil {
+		t.Fatalf("ConnectRedis() error = %v", err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+
+	if err := client.Ping(t.Context()).Err(); err != nil {
+		t.Fatal(err)
+	}
+
+	got := rec.Collect(t)
+	for _, name := range []string{"db.client.connections.use_time", "db.client.connections.usage"} {
+		if len(got.Find(name, map[string]string{"pool.name": "queue"})) == 0 {
+			t.Errorf("no %s for pool queue; recorded %v", name, got.Names())
+		}
+	}
 }

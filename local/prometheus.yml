@@ -1,0 +1,13 @@
+# Prometheus for local runs (compose profile "metrics"). It scrapes nothing: the programs push to it
+# over OTLP (http://localhost:9090/api/v1/otlp, see .example.env).
+otlp:
+  # Each program's service.name and service.instance.id become the job and instance labels; these
+  # become labels too, so a dashboard can filter by them.
+  promote_resource_attributes:
+    - service.version
+    - deployment.environment.name
+
+storage:
+  tsdb:
+    # Pushes from several programs can arrive slightly out of order.
+    out_of_order_time_window: 30m

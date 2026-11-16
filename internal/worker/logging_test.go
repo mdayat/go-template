@@ -10,8 +10,10 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/rs/zerolog"
+	"go.opentelemetry.io/otel/metric/noop"
 
 	"github.com/mdayat/go-template/internal/apperr"
+	"github.com/mdayat/go-template/internal/metrictest"
 	"github.com/mdayat/go-template/internal/queue"
 )
 
@@ -41,7 +43,7 @@ func logged(ctx context.Context, t *testing.T, run queue.Run, handler queue.Hand
 	t.Helper()
 	var logs bytes.Buffer
 	mux := queue.NewMux()
-	mux.Use(logJobs(zerolog.New(&logs)))
+	mux.Use(logJobs(zerolog.New(&logs), noop.Float64Histogram{}))
 	mux.Handle(run.Type, handler)
 
 	err := mux.Process(queue.WithRun(ctx, run), run.Type, nil)
@@ -160,5 +162,49 @@ func TestLogJobsRunCutOff(t *testing.T) {
 	}
 	if err != nil {
 		t.Errorf("error handed back = %v, want nil: the queue sees the context itself", err)
+	}
+}
+
+// Each run's time is recorded with the same result its log line gives: succeeded, retrying (a
+// failure or panic with attempts left), or failed (for good).
+func TestLogJobsRecordsDurations(t *testing.T) {
+	t.Parallel()
+	rec := metrictest.New()
+	durations, err := newJobDurations(rec.Provider)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mux := queue.NewMux()
+	mux.Use(logJobs(zerolog.Nop(), durations))
+	mux.Handle("test:ok", func(context.Context, []byte) error { return nil })
+	mux.Handle("test:fail", func(context.Context, []byte) error { return errors.New("down") })
+	mux.Handle("test:panic", func(context.Context, []byte) error { panic("boom") })
+	run := func(jobType string, attempt int) {
+		r := queue.Run{ID: "job-1", Type: jobType, Queue: "default", Attempt: attempt, MaxAttempts: 2}
+		_ = mux.Process(queue.WithRun(t.Context(), r), jobType, nil)
+	}
+
+	run("test:ok", 1)
+	run("test:ok", 1)
+	run("test:fail", 1)  // one attempt left
+	run("test:fail", 2)  // the last
+	run("test:panic", 1) // retried like any failure
+
+	got := rec.Collect(t)
+	for _, want := range []struct {
+		jobType, result string
+		runs            int64
+	}{
+		{"test:ok", "succeeded", 2},
+		{"test:fail", "retrying", 1},
+		{"test:fail", "failed", 1},
+		{"test:panic", "retrying", 1},
+	} {
+		points := got.Find("job.run.duration", map[string]string{
+			"job.type": want.jobType, "job.queue": "default", "job.result": want.result,
+		})
+		if len(points) != 1 || points[0].Count != want.runs {
+			t.Errorf("%s %s: points %+v, want one of %d runs", want.jobType, want.result, points, want.runs)
+		}
 	}
 }

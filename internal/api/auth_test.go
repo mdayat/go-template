@@ -12,6 +12,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog"
+	"go.opentelemetry.io/otel/metric/noop"
 
 	"github.com/mdayat/go-template/internal/auth/jwks"
 	"github.com/mdayat/go-template/internal/authtest"
@@ -33,7 +34,7 @@ func protectedRouter(t *testing.T, cfg jwks.Config) (http.Handler, *pgxpool.Pool
 	}
 	pool := testdb.New(t)
 	var logs bytes.Buffer
-	router := newBaseRouter(zerolog.New(&logs), nil)
+	router := newBaseRouter(zerolog.New(&logs), noop.NewMeterProvider(), nil)
 	router.With(authenticate(authn, user.NewService(db.New(pool)), nil)).Get("/private", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})

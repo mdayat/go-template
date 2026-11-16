@@ -104,6 +104,13 @@ outside `cmd/`.
 - Never log bodies, headers, query strings, secrets or personal data.
 - Never call `zerolog.Ctx(ctx).UpdateContext` where `ctx` may lack a logger of its own.
 
+**Metrics** ([metrics.md](docs/standards/metrics.md))
+- Record through the `metric.MeterProvider` passed in from `cmd/` (`telemetry.Start`); never
+  OpenTelemetry's global one. Ready-made instrumentation first; your own only where none exists.
+- Never a personal or unbounded value in an attribute (user ID, raw path, IP, SQL, anything a
+  client sets): route patterns and sqlc query names only.
+- Tests check metrics with `internal/metrictest`.
+
 <!-- remove:worker -->
 **Jobs** ([worker.md](docs/standards/worker.md))
 - Every job may run twice (retries, a deploy mid-job, duplicates): make a second run change nothing,

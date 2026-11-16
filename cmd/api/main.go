@@ -23,6 +23,7 @@ import (
 	"github.com/mdayat/go-template/internal/queue/valkey"
 	ratelimitvalkey "github.com/mdayat/go-template/internal/ratelimit/valkey"
 	"github.com/mdayat/go-template/internal/startup"
+	"github.com/mdayat/go-template/internal/telemetry"
 )
 
 // At least api.RequestTimeout, so every request still running has had its full time when its
@@ -69,8 +70,16 @@ func run() error {
 		return err
 	}
 	startup.SetupLogger(cfg.app)
+	version := startup.Version(buildVersion)
 
-	pool, err := startup.ConnectDB(ctx, cfg.databaseURL)
+	metrics, err := telemetry.Start(ctx, telemetry.Program{Name: "api", Version: version, Env: cfg.app.Env}, log.Logger)
+	if err != nil {
+		return err
+	}
+	// Last, after the server and connections close, so their final numbers are sent too.
+	defer metrics.Flush(log.Logger)
+
+	pool, err := startup.ConnectDB(ctx, cfg.databaseURL, metrics.Provider)
 	if err != nil {
 		return err
 	}
@@ -78,7 +87,7 @@ func run() error {
 
 	// Not connected here: a Valkey that's down at startup must not stop the API, which counts in
 	// memory until Valkey answers (see valkey.Limiter).
-	limitsClient, err := startup.RedisFailFast(cfg.redisURL, rateLimitTimeout)
+	limitsClient, err := startup.RedisFailFast(cfg.redisURL, rateLimitTimeout, "ratelimit", metrics.Provider)
 	if err != nil {
 		return err
 	}
@@ -86,7 +95,7 @@ func run() error {
 	cfg.limits.Limiter = ratelimitvalkey.New(limitsClient, "api:", rateLimitTimeout, log.Logger)
 
 	// remove:worker
-	redisClient, err := startup.ConnectRedis(ctx, cfg.redisURL)
+	redisClient, err := startup.ConnectRedis(ctx, cfg.redisURL, "queue", metrics.Provider)
 	if err != nil {
 		return err
 	}
@@ -106,7 +115,7 @@ func run() error {
 		return err
 	}
 	server := &http.Server{
-		Handler:           api.NewRouter(log.Logger, services, authn, cfg.limits),
+		Handler:           api.NewRouter(log.Logger, metrics.Provider, services, authn, cfg.limits),
 		ErrorLog:          api.ServerErrorLog(log.Logger),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
@@ -119,7 +128,7 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("listen on %s: %w", cfg.httpAddr, err)
 	}
-	log.Info().Str("addr", listener.Addr().String()).Str("version", startup.Version(buildVersion)).Msg("api listening")
+	log.Info().Str("addr", listener.Addr().String()).Str("version", version).Msg("api listening")
 
 	serveErr := make(chan error, 1)
 	go func() {

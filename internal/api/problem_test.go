@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/rs/zerolog"
+	"go.opentelemetry.io/otel/metric/noop"
 
 	"github.com/mdayat/go-template/internal/apperr"
 )
@@ -22,7 +23,7 @@ import (
 func problemRouter(t *testing.T) (http.Handler, *bytes.Buffer) {
 	t.Helper()
 	var logs bytes.Buffer
-	router := newBaseRouter(zerolog.New(&logs), nil)
+	router := newBaseRouter(zerolog.New(&logs), noop.NewMeterProvider(), nil)
 	routes := map[string]HandlerFunc{
 		"/bad-request": func(http.ResponseWriter, *http.Request) error {
 			return apperr.BadRequest("body must be JSON")
@@ -255,7 +256,7 @@ func TestHeadIsServedByGetRoutes(t *testing.T) {
 
 func TestRequestsHaveATimeLimit(t *testing.T) {
 	t.Parallel()
-	router := newBaseRouter(zerolog.Nop(), nil)
+	router := newBaseRouter(zerolog.Nop(), noop.NewMeterProvider(), nil)
 	router.Get("/deadline", func(w http.ResponseWriter, r *http.Request) {
 		deadline, ok := r.Context().Deadline()
 		if !ok || time.Until(deadline) > RequestTimeout {
@@ -276,7 +277,7 @@ func TestRequestsHaveATimeLimit(t *testing.T) {
 func TestRequestOverTheTimeLimitIs503(t *testing.T) {
 	t.Parallel()
 	var logs bytes.Buffer
-	router := newBaseRouter(zerolog.New(&logs), nil)
+	router := newBaseRouter(zerolog.New(&logs), noop.NewMeterProvider(), nil)
 	router.With(limitRequestTime(10*time.Millisecond)).Get("/slow", Handle(func(_ http.ResponseWriter, r *http.Request) error {
 		<-r.Context().Done()
 		return fmt.Errorf("list tasks: %w", r.Context().Err())
@@ -304,7 +305,7 @@ func TestRequestOverTheTimeLimitIs503(t *testing.T) {
 
 func TestErrorReplyDropsBodyHeaders(t *testing.T) {
 	t.Parallel()
-	router := newBaseRouter(zerolog.Nop(), nil)
+	router := newBaseRouter(zerolog.Nop(), noop.NewMeterProvider(), nil)
 	router.Get("/export", Handle(func(w http.ResponseWriter, _ *http.Request) error {
 		// Set up for a gzipped, cacheable file download, then fail before writing it.
 		w.Header().Set("Content-Encoding", "gzip")

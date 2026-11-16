@@ -18,6 +18,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog"
+	"go.opentelemetry.io/otel/metric/noop"
 
 	"github.com/mdayat/go-template/internal/db"
 	"github.com/mdayat/go-template/internal/httpclient"
@@ -142,7 +143,7 @@ func TestPurgeDeletedRowsWithNoTablesRejectsABadAge(t *testing.T) {
 	server, received := testWebhook(t, http.StatusNoContent)
 	mux := queue.NewMux()
 	// As NewMux does: logJobs turns an apperr kind into a failure that isn't retried.
-	mux.Use(logJobs(zerolog.Nop()))
+	mux.Use(logJobs(zerolog.Nop(), noop.Float64Histogram{}))
 	purgeJobs{reports: webhook.NewHTTPSender(httpclient.New(5*time.Second), server.URL)}.mount(mux)
 
 	err := mux.Process(t.Context(), jobs.TypePurgeDeletedRows, []byte(`{"older_than_days":0}`))
@@ -321,5 +322,5 @@ func testWorkerReportingTo(t *testing.T, url string, timeout time.Duration) (*qu
 	t.Helper()
 	pool := testdb.New(t)
 	reports := webhook.NewHTTPSender(httpclient.New(timeout), url)
-	return NewMux(zerolog.Nop(), NewServices(db.New(pool), reports)), pool
+	return newTestMux(t, NewServices(db.New(pool), reports)), pool
 }

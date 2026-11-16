@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/rs/zerolog"
+	"go.opentelemetry.io/otel/metric/noop"
 
 	"github.com/mdayat/go-template/internal/apperr"
 	"github.com/mdayat/go-template/internal/queue"
@@ -43,7 +44,7 @@ func runOnQueue(t *testing.T, handler queue.Handler, maxRetries int, timeout tim
 	lines := make(lineWriter, 10)
 
 	mux := queue.NewMux()
-	mux.Use(logJobs(zerolog.New(lines)))
+	mux.Use(logJobs(zerolog.New(lines), noop.Float64Histogram{}))
 	mux.Handle("test:job", handler)
 	server, err := valkey.NewServer(client, mux, valkey.ServerOptions{
 		Queues: []string{queueName}, ShutdownTimeout: time.Second, Logger: zerolog.Nop(),

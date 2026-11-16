@@ -33,8 +33,42 @@ services:
       retries: 15
   # remove:end
 
+  # Metrics, locally: `docker compose --profile metrics up -d` (make metrics-up). Prometheus stores
+  # what the programs push (OTEL_* in .env); Grafana shows it at http://localhost:3000, with the
+  # dashboards in local/grafana/dashboards. Not started by make db-up or make test.
+  prometheus:
+    image: prom/prometheus:v3.16.0
+    profiles: [metrics]
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --web.enable-otlp-receiver
+      - --storage.tsdb.retention.time=7d
+    ports:
+      # Only this machine: Prometheus has no login.
+      - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
+    volumes:
+      - ./local/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+
+  grafana:
+    image: grafana/grafana:13.3.1
+    profiles: [metrics]
+    depends_on: [prometheus]
+    environment:
+      # Open without a login, read-only; sign in as admin/admin to edit.
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+    ports:
+      - "127.0.0.1:${GRAFANA_PORT:-3000}:3000"
+    volumes:
+      - ./local/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./local/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+
 volumes:
   postgres-data:
+  prometheus-data:
+  grafana-data:
   # remove:valkey
   valkey-data:
   # remove:end

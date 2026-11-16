@@ -7,12 +7,17 @@ import (
 	"fmt"
 	"os"
 	"runtime/debug"
+	"strings"
 	"time"
 
+	"github.com/exaring/otelpgx"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
+	"go.opentelemetry.io/otel/metric"
+	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
+	tracenoop "go.opentelemetry.io/otel/trace/noop"
 
 	"github.com/mdayat/go-template/internal/config"
 )
@@ -61,11 +66,33 @@ func Version(buildVersion string) string {
 	return revision
 }
 
-// ConnectDB returns a pool on url once a connection works, so a wrong URL fails at startup.
-func ConnectDB(ctx context.Context, url string) (*pgxpool.Pool, error) {
-	pool, err := pgxpool.New(ctx, url)
+// ConnectDB returns a pool on url once a connection works, so a wrong URL fails at startup. It
+// records to meters, from the app's side: each query's time (by its sqlc name), and the pool's use
+// (connections in use and idle, waits for a free one), which the database itself can't see.
+func ConnectDB(ctx context.Context, url string, meters metric.MeterProvider) (*pgxpool.Pool, error) {
+	cfg, err := pgxpool.ParseConfig(url)
+	if err != nil {
+		// pgx's parse error leaves the password out.
+		return nil, fmt.Errorf("read DATABASE_URL: %w", err)
+	}
+	cfg.ConnConfig.Tracer = otelpgx.NewTracer(
+		otelpgx.WithMeterProvider(meters),
+		otelpgx.WithTracerProvider(tracenoop.NewTracerProvider()), // no traces: metrics only
+		otelpgx.WithMetricOperationName(queryName),
+	)
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("create database pool: %w", err)
+	}
+	err = otelpgx.RecordStats(pool,
+		otelpgx.WithStatsMeterProvider(meters),
+		// Instead of otelpgx's "host:port/database", which would put the database's address on
+		// every pool series. The program has one pool.
+		otelpgx.WithStatsAttributes(semconv.DBClientConnectionPoolName("main")),
+	)
+	if err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("record database pool metrics: %w", err)
 	}
 
 	pingCtx, cancel := context.WithTimeout(ctx, connectTimeout)
@@ -76,4 +103,17 @@ func ConnectDB(ctx context.Context, url string) (*pgxpool.Pool, error) {
 		return nil, fmt.Errorf("connect to database: %w", err)
 	}
 	return pool, nil
+}
+
+// queryName names a query for its metrics: sqlc's name for it ("GetTask", from its first line,
+// "-- name: GetTask :one"), else its first SQL word ("SELECT"). Never the SQL itself: metrics must
+// keep to a small, fixed set of names.
+func queryName(ctx context.Context, stmt string) string {
+	if rest, ok := strings.CutPrefix(stmt, "-- name: "); ok {
+		firstLine, _, _ := strings.Cut(rest, "\n")
+		if fields := strings.Fields(firstLine); len(fields) > 0 {
+			return fields[0]
+		}
+	}
+	return otelpgx.SQLOperationName(ctx, stmt)
 }

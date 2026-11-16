@@ -6,6 +6,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog"
+	"go.opentelemetry.io/otel/metric/noop"
 
 	"github.com/mdayat/go-template/internal/db"
 	"github.com/mdayat/go-template/internal/queue"
@@ -20,7 +21,17 @@ func TestMain(m *testing.M) { testdb.Main(m) }
 func testWorker(t *testing.T) (*queue.Mux, *pgxpool.Pool) {
 	t.Helper()
 	pool := testdb.New(t)
-	return NewMux(zerolog.Nop(), NewServices(db.New(pool), webhook.Discard{})), pool
+	return newTestMux(t, NewServices(db.New(pool), webhook.Discard{})), pool
+}
+
+// newTestMux is NewMux for tests: no logs, no metrics.
+func newTestMux(t *testing.T, services Services) *queue.Mux {
+	t.Helper()
+	mux, err := NewMux(zerolog.Nop(), noop.NewMeterProvider(), services)
+	if err != nil {
+		t.Fatalf("NewMux() error = %v", err)
+	}
+	return mux
 }
 
 // Helpers shared by every feature's job tests live here, not in a feature's test file, so removing

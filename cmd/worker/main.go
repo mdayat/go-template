@@ -18,6 +18,7 @@ import (
 	"github.com/mdayat/go-template/internal/jobs"
 	"github.com/mdayat/go-template/internal/queue/valkey"
 	"github.com/mdayat/go-template/internal/startup"
+	"github.com/mdayat/go-template/internal/telemetry"
 	"github.com/mdayat/go-template/internal/webhook"
 	"github.com/mdayat/go-template/internal/worker"
 )
@@ -66,14 +67,22 @@ func run() error {
 		return err
 	}
 	startup.SetupLogger(cfg.app)
+	version := startup.Version(buildVersion)
 
-	pool, err := startup.ConnectDB(ctx, cfg.databaseURL)
+	metrics, err := telemetry.Start(ctx, telemetry.Program{Name: "worker", Version: version, Env: cfg.app.Env}, log.Logger)
+	if err != nil {
+		return err
+	}
+	// Last, after the job server and connections close, so the last jobs' numbers are sent too.
+	defer metrics.Flush(log.Logger)
+
+	pool, err := startup.ConnectDB(ctx, cfg.databaseURL, metrics.Provider)
 	if err != nil {
 		return err
 	}
 	defer pool.Close()
 
-	redisClient, err := startup.ConnectRedis(ctx, cfg.redisURL)
+	redisClient, err := startup.ConnectRedis(ctx, cfg.redisURL, "queue", metrics.Provider)
 	if err != nil {
 		return err
 	}
@@ -87,7 +96,10 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	mux := worker.NewMux(log.Logger, worker.NewServices(db.New(pool), purgeReports(cfg.purgeWebhookURL)))
+	mux, err := worker.NewMux(log.Logger, metrics.Provider, worker.NewServices(db.New(pool), purgeReports(cfg.purgeWebhookURL)))
+	if err != nil {
+		return err
+	}
 	server, err := valkey.NewServer(redisClient, mux, valkey.ServerOptions{
 		Queues:          []string{jobs.Queue},
 		ShutdownTimeout: worker.ShutdownTimeout,
@@ -103,7 +115,7 @@ func run() error {
 		server.Shutdown()
 		return fmt.Errorf("start scheduler: %w", err)
 	}
-	log.Info().Str("version", startup.Version(buildVersion)).Msg("worker started")
+	log.Info().Str("version", version).Msg("worker started")
 
 	<-ctx.Done()
 	// Release the signal handler so a second Ctrl-C kills a stuck shutdown right away.

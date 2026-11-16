@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
+	"go.opentelemetry.io/otel/metric"
 
 	"github.com/mdayat/go-template/internal/db"
 	"github.com/mdayat/go-template/internal/queue"
@@ -44,12 +45,16 @@ func NewServices(queries *db.Queries, purgeReports EventSender) Services {
 	}
 }
 
-// NewMux returns the handler for every job type, each job logged to logger.
-func NewMux(logger zerolog.Logger, services Services) *queue.Mux {
+// NewMux returns the handler for every job type, each job logged to logger and measured to meters.
+func NewMux(logger zerolog.Logger, meters metric.MeterProvider, services Services) (*queue.Mux, error) {
+	durations, err := newJobDurations(meters)
+	if err != nil {
+		return nil, err
+	}
 	mux := queue.NewMux()
-	mux.Use(logJobs(logger))
+	mux.Use(logJobs(logger, durations))
 	purgeJobs{tables: tablePurges(services), reports: services.PurgeReports}.mount(mux)
-	return mux
+	return mux, nil
 }
 
 // Schedules returns every job that runs on a timetable. A feature with jobs of its own adds its
