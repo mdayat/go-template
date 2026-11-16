@@ -9,6 +9,7 @@ import (
 
 	"github.com/mdayat/go-template/internal/apperr"
 	"github.com/mdayat/go-template/internal/auth"
+	"github.com/mdayat/go-template/internal/user"
 )
 
 // Authenticator says who a request's token belongs to: internal/auth/jwks, or another provider's
@@ -23,12 +24,14 @@ type Authenticator interface {
 const signInRequired = "a valid sign-in token is required"
 
 // authenticate lets through only requests carrying a token authn accepts, sent as
-// "Authorization: Bearer <token>". Anything else gets a 401, or a 503 when authn can't check
-// tokens at all: an outage on our side, which a client may retry.
-func authenticate(authn Authenticator) func(http.Handler) http.Handler {
+// "Authorization: Bearer <token>", and turns who it is into our user through users, recording them
+// on their first sign-in. Anything else gets a 401, or a 503 when authn can't check tokens at all:
+// an outage on our side, which a client may retry.
+func authenticate(authn Authenticator, users *user.Service) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if _, err := identify(r, authn); err != nil {
+			id, err := identify(r, authn)
+			if err != nil {
 				if e, ok := errors.AsType[*apperr.Error](err); ok && e.Kind == apperr.KindUnauthenticated {
 					// Tells the client which kind of credentials to send (RFC 6750).
 					w.Header().Set("WWW-Authenticate", "Bearer")
@@ -36,6 +39,12 @@ func authenticate(authn Authenticator) func(http.Handler) http.Handler {
 				writeError(w, r, err)
 				return
 			}
+			u, err := users.SignIn(r.Context(), id.Subject)
+			if err != nil {
+				writeError(w, r, err)
+				return
+			}
+			recordUser(r, u)
 			next.ServeHTTP(w, r)
 		})
 	}

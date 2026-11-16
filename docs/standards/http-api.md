@@ -75,14 +75,24 @@ Every route but `/healthz` needs someone signed in: the request carries
 | can't be checked (the provider's keys never arrived) | 503: our outage, which a client may retry |
 
 The provider only proves who someone is; what they may do is decided on our own data, never on
-the token's claims, so changing provider changes no rule. The template's provider is
-`internal/auth/jwks`: JWTs checked against the keys their issuer publishes (`AUTH_JWKS_URL`,
-`AUTH_ISSUER`, `AUTH_AUDIENCE` in `.example.env`). It covers Firebase, Auth0, Cognito, Keycloak and
-Supabase, given tokens that name this service in `aud` and are signed RS256 or ES256: Cognito's
-ID tokens (its access tokens have no `aud`), Keycloak with an audience mapper. Another kind
-(opaque tokens looked up in a table, say) is another
-package with an `Authenticate(ctx, token)` method, picked in `cmd/api`; handlers and services
-don't change.
+the token's claims, so changing provider changes no rule. `authenticate` turns the provider's ID
+for the person (the token's subject) into our user (`internal/user`, the `users` table), adding
+them on their first request; other tables point at `users.id`, never at the provider's ID.
+Moving to another provider means pointing each user's `auth_subject` at their new ID there, once;
+their rows and rights stay. Making someone an admin (`is_admin`, for rules that give admins more)
+is done by hand, after their first sign-in (locally, their ID is the `user=` you gave
+`make dev-token`):
+
+```sql
+UPDATE users SET is_admin = true WHERE auth_subject = '<their ID at the provider>';
+```
+
+The template's provider is `internal/auth/jwks`: JWTs checked against the keys their issuer
+publishes (`AUTH_JWKS_URL`, `AUTH_ISSUER`, `AUTH_AUDIENCE` in `.example.env`). It covers Firebase,
+Auth0, Cognito, Keycloak and Supabase, given tokens that name this service in `aud` and are signed
+RS256 or ES256: Cognito's ID tokens (its access tokens have no `aud`), Keycloak with an audience
+mapper. Another kind (opaque tokens looked up in a table, say) is another package with an
+`Authenticate(ctx, token)` method, picked in `cmd/api`; handlers and services don't change.
 
 - For local runs, `make dev-token user=alice` prints a token the local API accepts; run it before
   the API's first start, which needs the key it makes. The API refuses its keys in production.

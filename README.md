@@ -18,6 +18,7 @@ jobs. Keep both, one or neither: see [Choose what you need](#choose-what-you-nee
 | `internal/json` | the only package that imports a JSON library, so it can be replaced there alone |
 | `internal/httpclient` | HTTP clients for outside services, each call with a time limit, and which failures are worth retrying |
 | `internal/webhook` | reports events to a URL another system gave us (the example of calling an outside service) |
+| `internal/user` | the people the app serves (`users` table): our own record, apart from any sign-in provider |
 | `internal/task` | the example feature's rules, and their tests |
 | `internal/postgres` | recognises the Postgres driver's errors, so services don't import the driver |
 | `internal/startup` | what every program does first: the logger, the Postgres connection |
@@ -145,8 +146,7 @@ hand, everywhere at once (`make check-versions`, run by CI, fails until they agr
 ## Replacing the example
 
 Build your first feature the way tasks are built (its service in `internal/<feature>`, with its
-tests), then remove tasks. sqlc needs at least one query, so
-do it in one go with your first table:
+tests), then remove tasks, in one go with your first table:
 
 1. Delete the example:
 

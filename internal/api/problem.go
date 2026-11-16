@@ -14,6 +14,7 @@ import (
 
 	"github.com/mdayat/go-template/internal/apperr"
 	"github.com/mdayat/go-template/internal/json"
+	"github.com/mdayat/go-template/internal/user"
 )
 
 // HandlerFunc is an HTTP handler that returns its failure instead of writing it.
@@ -160,6 +161,19 @@ func recordError(r *http.Request, err error) {
 	}
 	logger.UpdateContext(func(c zerolog.Context) zerolog.Context {
 		return c.Dict("error", zerolog.Dict().Str("message", err.Error()))
+	})
+}
+
+// recordUser puts who made the request on its summary log line: our user ID only, never the
+// provider's ID for them or anything else about them. A request without its own logger has no
+// summary line, so there's nothing to add to (see recordError).
+func recordUser(r *http.Request, u user.User) {
+	logger := zerolog.Ctx(r.Context())
+	if logger == zerolog.DefaultContextLogger {
+		return
+	}
+	logger.UpdateContext(func(c zerolog.Context) zerolog.Context {
+		return c.Dict("user", zerolog.Dict().Str("id", u.ID.String()))
 	})
 }
 

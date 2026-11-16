@@ -1,33 +1,43 @@
 package api
 
 import (
+	"bytes"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog"
 
 	"github.com/mdayat/go-template/internal/auth/jwks"
 	"github.com/mdayat/go-template/internal/authtest"
+	"github.com/mdayat/go-template/internal/db"
 	"github.com/mdayat/go-template/internal/httpclient"
+	"github.com/mdayat/go-template/internal/testdb"
+	"github.com/mdayat/go-template/internal/user"
 )
 
 // protectedRouter returns the shared middleware with one route, /private, behind authenticate,
-// trusting cfg's issuer. It answers 204 to whoever gets in. No feature's routes: removing one can't
-// break these tests.
-func protectedRouter(t *testing.T, cfg jwks.Config) http.Handler {
+// trusting cfg's issuer and with users on a database of the test's own, and the buffer the logs
+// go to. It answers 204 to whoever gets in. No feature's routes: removing one can't break these
+// tests.
+func protectedRouter(t *testing.T, cfg jwks.Config) (http.Handler, *pgxpool.Pool, *bytes.Buffer) {
 	t.Helper()
 	authn, err := jwks.New(t.Context(), cfg, httpclient.New(5*time.Second), zerolog.Nop())
 	if err != nil {
 		t.Fatalf("jwks.New() error = %v", err)
 	}
-	router := newBaseRouter(zerolog.Nop())
-	router.With(authenticate(authn)).Get("/private", func(w http.ResponseWriter, _ *http.Request) {
+	pool := testdb.New(t)
+	var logs bytes.Buffer
+	router := newBaseRouter(zerolog.New(&logs))
+	router.With(authenticate(authn, user.NewService(db.New(pool)))).Get("/private", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
-	return router
+	return router, pool, &logs
 }
 
 // sendWithAuth sends a GET with the given Authorization header ("" for none).
@@ -47,7 +57,7 @@ func sendWithAuth(t *testing.T, router http.Handler, target, authorization strin
 func TestRoutesNeedSomeoneSignedIn(t *testing.T) {
 	t.Parallel()
 	issuer := authtest.NewIssuer(t)
-	router := protectedRouter(t, issuer.Config())
+	router, _, _ := protectedRouter(t, issuer.Config())
 
 	tests := []struct {
 		name          string
@@ -71,16 +81,53 @@ func TestRoutesNeedSomeoneSignedIn(t *testing.T) {
 	}
 }
 
-// The scheme's name is case-insensitive (RFC 9110), and a request signed in reaches the route.
+// The scheme's name is case-insensitive (RFC 9110). A request signed in reaches the route as our
+// user, recorded on the first sign-in, and the log line names that user by our ID only.
 func TestRoutesLetInSomeoneSignedIn(t *testing.T) {
 	t.Parallel()
 	issuer := authtest.NewIssuer(t)
-	router := protectedRouter(t, issuer.Config())
+	router, pool, logs := protectedRouter(t, issuer.Config())
 
-	rec := sendWithAuth(t, router, "/private", "bearer "+issuer.Token("alice"))
+	for range 2 {
+		if rec := sendWithAuth(t, router, "/private", "bearer "+issuer.Token("alice")); rec.Code != http.StatusNoContent {
+			t.Fatalf("GET /private = %d %s, want 204", rec.Code, rec.Body)
+		}
+	}
 
-	if rec.Code != http.StatusNoContent {
-		t.Errorf("GET /private = %d %s, want 204", rec.Code, rec.Body)
+	var id string
+	if err := pool.QueryRow(t.Context(), "SELECT id FROM users WHERE auth_subject = 'alice'").Scan(&id); err != nil {
+		t.Fatalf("alice's user row: %v (want exactly one)", err)
+	}
+	lines := logLines(t, logs)
+	if len(lines) != 2 {
+		t.Fatalf("log lines = %d, want 2", len(lines))
+	}
+	for _, line := range lines {
+		if diff := cmp.Diff(map[string]any{"id": id}, line["user"]); diff != "" {
+			t.Errorf("log line's user mismatch (-want +got):\n%s", diff)
+		}
+		if strings.Contains(fmt.Sprint(line), "alice") {
+			t.Errorf("log line = %v, want it without the provider's ID for the user", line)
+		}
+	}
+}
+
+// A database that's down while signing someone in is an unexpected failure (500), and the log line
+// still never names the provider's ID for them.
+func TestSignInWithTheDatabaseDownIs500(t *testing.T) {
+	t.Parallel()
+	issuer := authtest.NewIssuer(t)
+	router, pool, logs := protectedRouter(t, issuer.Config())
+	pool.Close()
+
+	rec := sendWithAuth(t, router, "/private", "Bearer "+issuer.Token("alice"))
+
+	want := problemReply{Status: http.StatusInternalServerError, Detail: internalErrorDetail}
+	if diff := cmp.Diff(want, readProblem(t, rec)); diff != "" {
+		t.Errorf("GET /private reply mismatch (-want +got):\n%s", diff)
+	}
+	if strings.Contains(logs.String(), "alice") {
+		t.Errorf("log = %s, want it without the provider's ID for the user", logs)
 	}
 }
 
@@ -93,7 +140,7 @@ func TestRoutesAnswer503WhenSignInCantBeChecked(t *testing.T) {
 	down.Close()
 	cfg := issuer.Config()
 	cfg.KeysURL = down.URL
-	router := protectedRouter(t, cfg)
+	router, _, _ := protectedRouter(t, cfg)
 
 	rec := sendWithAuth(t, router, "/private", "Bearer "+issuer.Token("alice"))
 
@@ -106,7 +153,7 @@ func TestRoutesAnswer503WhenSignInCantBeChecked(t *testing.T) {
 // The health check stays open: a load balancer has no token.
 func TestHealthCheckNeedsNoSignIn(t *testing.T) {
 	t.Parallel()
-	router := protectedRouter(t, authtest.NewIssuer(t).Config())
+	router, _, _ := protectedRouter(t, authtest.NewIssuer(t).Config())
 
 	if rec := sendWithAuth(t, router, "/healthz", ""); rec.Code != http.StatusOK {
 		t.Errorf("GET /healthz = %d, want 200", rec.Code)

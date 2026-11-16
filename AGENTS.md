@@ -82,9 +82,10 @@ refuses them outside `internal/queue/valkey`, `internal/startup` and `internal/t
   `tr.decoder.decode`; write replies only with `writeJSON`.
 - `validate` tags check shape; the service checks meaning.
 - Lists: an object with a list field, cursor paging, never `null` for an empty list.
-- Every route but `/healthz` is behind `authenticate` (sign-in). Handlers never read tokens or a
-  provider's claims; what someone may do is decided on our own data. A provider is an
-  `Authenticator` implementation picked in `cmd/api`. Endpoint tests are signed in by `testAPI`.
+- Every route but `/healthz` is behind `authenticate` (sign-in), which turns the provider's ID into
+  our user (`internal/user`, the `users` table; `is_admin` is ours). Handlers never read tokens or a
+  provider's claims; tables point at `users.id`. A provider is an `Authenticator` implementation
+  picked in `cmd/api`. Endpoint tests are signed in by `testAPI`.
 
 <!-- remove:end -->
 **Logging** ([logging.md](docs/standards/logging.md))

@@ -19,7 +19,8 @@ that line, and a panic its stack: there is never a second line for the same fail
 {"level":"info","request_id":"dbqsuft4m06s73apk900",
  "http":{"request":{"method":"POST"},"response":{"status_code":201,"body":{"bytes":166}},"route":"/tasks"},
  "url":{"path":"/tasks"},"user_agent":{"original":"curl/8.7.1"},
- "client":{"ip":"192.168.65.1","port":46088},"duration_ms":10.6,"message":"request completed"}
+ "client":{"ip":"192.168.65.1","port":46088},"user":{"id":"efd81794-932e-4377-bcc0-9555c784e38e"},
+ "duration_ms":10.6,"message":"request completed"}
 ```
 
 - `http.route` is the route pattern (`/tasks/{id}`), so requests group by endpoint; `url.path` is
@@ -29,6 +30,8 @@ that line, and a panic its stack: there is never a second line for the same fail
   forged.
 - A failed request carries `error.message` on the same line. A panic adds the panic and its
   stack.
+- A signed-in request carries `user.id`: our ID for the user, never the sign-in provider's ID for
+  them or anything else about them.
 - A successful `/healthz` isn't logged: load balancers call it every few seconds.
 
 <!-- remove:end -->

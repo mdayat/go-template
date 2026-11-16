@@ -18,3 +18,10 @@ type Task struct {
 	UpdatedAt time.Time
 	DeletedAt *time.Time
 }
+
+type User struct {
+	ID          uuid.UUID
+	AuthSubject string
+	IsAdmin     bool
+	CreatedAt   time.Time
+}

@@ -14,6 +14,7 @@ import (
 	"github.com/mdayat/go-template/internal/db"
 	"github.com/mdayat/go-template/internal/queue"
 	"github.com/mdayat/go-template/internal/task"
+	"github.com/mdayat/go-template/internal/user"
 )
 
 const (
@@ -41,6 +42,8 @@ type jobResponse struct {
 // Services holds what the routes call, one field per feature. A new feature adds its field here and
 // builds it in NewServices.
 type Services struct {
+	// Users turns whoever signed in into our user (see authenticate).
+	Users *user.Service
 	Tasks *task.Service
 	// remove:worker
 	// Jobs queues background jobs for the worker (cmd/worker).
@@ -58,6 +61,7 @@ func NewServices(
 	// remove:end
 ) Services {
 	return Services{
+		Users: user.NewService(queries),
 		Tasks: task.NewService(queries),
 		// remove:worker
 		Jobs: jobs,
@@ -72,7 +76,7 @@ func NewRouter(logger zerolog.Logger, services Services, authn Authenticator) *c
 	// One decoder for every feature: the validator caches what it learns about each type.
 	decoder := newBodyDecoder()
 	router.Group(func(r chi.Router) {
-		r.Use(authenticate(authn))
+		r.Use(authenticate(authn, services.Users))
 		taskRoutes{tasks: services.Tasks, decoder: decoder}.mount(r)
 		// remove:worker
 		purgeRoutes{jobs: services.Jobs, decoder: decoder}.mount(r)
