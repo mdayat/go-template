@@ -12,18 +12,13 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/mdayat/go-template/internal/apperr"
-	"github.com/mdayat/go-template/internal/jobs"
-	"github.com/mdayat/go-template/internal/queue"
 	"github.com/mdayat/go-template/internal/task"
 )
 
 // taskRoutes serves /tasks. Request shape (a field is present) is checked by validate tags; the
 // rules about what a valid task is live in the task service.
 type taskRoutes struct {
-	tasks *task.Service
-	// remove:worker
-	jobs queue.Enqueuer
-	// remove:end
+	tasks   *task.Service
 	decoder *bodyDecoder
 }
 
@@ -34,9 +29,6 @@ func (tr taskRoutes) mount(r chi.Router) {
 	r.Patch("/tasks/{id}", Handle(tr.update))
 	r.Delete("/tasks/{id}", Handle(tr.delete))
 	r.Post("/tasks/{id}/restore", Handle(tr.restore))
-	// remove:worker
-	r.Post("/task-purges", Handle(tr.purge))
-	// remove:end
 }
 
 type createTaskRequest struct {
@@ -48,13 +40,6 @@ type updateTaskRequest struct {
 	Title *string `json:"title"`
 	Done  *bool   `json:"done"`
 }
-
-// remove:worker
-type purgeTasksRequest struct {
-	OlderThanDays *int `json:"older_than_days" validate:"required"`
-}
-
-// remove:end
 
 type taskResponse struct {
 	ID        uuid.UUID `json:"id"`
@@ -174,34 +159,6 @@ func (tr taskRoutes) restore(w http.ResponseWriter, r *http.Request) error {
 	writeJSON(w, http.StatusOK, "application/json", toTaskResponse(t))
 	return nil
 }
-
-// remove:worker
-// purge queues a job that removes for good the tasks deleted, or marked done, more than
-// older_than_days ago. It only
-// queues: an endpoint that also wrote rows could save them and then fail to queue the job.
-func (tr taskRoutes) purge(w http.ResponseWriter, r *http.Request) error {
-	var req purgeTasksRequest
-	if err := tr.decoder.decode(w, r, &req); err != nil {
-		return err
-	}
-	// Checked here as well as in the job, so the caller hears about a bad age instead of the job
-	// failing later where nobody sees it.
-	if err := task.CheckPurgeAge(*req.OlderThanDays); err != nil {
-		return err
-	}
-	job, err := jobs.NewPurgeDoneTasks(*req.OlderThanDays)
-	if err != nil {
-		return err
-	}
-	id, err := tr.jobs.Enqueue(r.Context(), job)
-	if err != nil {
-		return err
-	}
-	writeJSON(w, http.StatusAccepted, "application/json", jobResponse{JobID: id})
-	return nil
-}
-
-// remove:end
 
 // taskID reads the {id} path segment. An ID that isn't a UUID can't name a task, so it's a 404 like
 // any other unknown ID.

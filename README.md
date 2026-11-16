@@ -135,11 +135,10 @@ do it in one go with your first table:
      `NewServices`, and the `taskRoutes{...}.mount(router)` line.
    <!-- remove:end -->
    <!-- remove:worker -->
-   - The worker's part: `rm internal/jobs/tasks.go internal/worker/tasks.go
-     internal/worker/tasks_test.go`. Replace tasks with your feature in `internal/worker/worker.go`:
-     the `Tasks` and `PurgeReports` fields of `worker.Services`, their lines in `NewServices`, the
-     `taskJobs{...}.mount(mux)` line in `NewMux`, and `taskSchedules` in `Schedules`. Drop the purge webhook from `cmd/worker` (`purgeReports`, and
-     `PURGE_WEBHOOK_URL` in `settings.go` and `.example.env`).
+   - The worker's part: replace tasks with your feature in `internal/worker/worker.go` (the `Tasks`
+     field of `worker.Services` and its line in `NewServices`) and in `tablePurges`
+     (`internal/worker/purge.go`), whose purge every soft-deleted table needs. The purge's tests
+     (`internal/worker/purge_test.go`) seed tasks: seed your table instead.
    <!-- remove:end -->
 2. In `db/schema.sql`, replace the `tasks` table and indexes with your own table; put its queries in
    `db/queries/<feature>.sql`. In `sqlc.yaml`, replace `tasks` with your table in the soft-delete

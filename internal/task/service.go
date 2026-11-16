@@ -15,6 +15,7 @@ import (
 	"github.com/mdayat/go-template/internal/apperr"
 	"github.com/mdayat/go-template/internal/db"
 	"github.com/mdayat/go-template/internal/postgres"
+	"github.com/mdayat/go-template/internal/softdelete"
 )
 
 const (
@@ -22,8 +23,6 @@ const (
 	MaxTitleLength = 200
 	// MaxPageSize is the most tasks one List call returns.
 	MaxPageSize = 100
-	// MaxPurgeAgeDays is the oldest age PurgeDone accepts, about ten years.
-	MaxPurgeAgeDays = 3650
 
 	// The unique index behind a duplicate title, from db/schema.sql. Postgres reports a unique
 	// index's name as the violated constraint's.
@@ -175,29 +174,18 @@ func (s *Service) Restore(ctx context.Context, id uuid.UUID) (Task, error) {
 	return fromRow(row), nil
 }
 
-// PurgeDone removes for good the tasks deleted more than olderThanDays days ago, and the live tasks
-// marked done whose last change is that old, and returns how many it removed. Running it again
-// deletes nothing more, so a repeated run is safe.
-func (s *Service) PurgeDone(ctx context.Context, olderThanDays int) (int64, error) {
-	if err := CheckPurgeAge(olderThanDays); err != nil {
+// PurgeDeleted removes for good the tasks deleted more than olderThanDays days ago (an age
+// softdelete.CheckPurgeAge accepts), and returns how many it removed. Live tasks are never removed.
+// Running it again removes nothing more, so a repeated run is safe.
+func (s *Service) PurgeDeleted(ctx context.Context, olderThanDays int) (int64, error) {
+	if err := softdelete.CheckPurgeAge(olderThanDays); err != nil {
 		return 0, err
 	}
-	deleted, err := s.queries.PurgeDoneTasks(ctx, int64(olderThanDays))
+	removed, err := s.queries.PurgeDeletedTasks(ctx, int64(olderThanDays))
 	if err != nil {
-		return 0, fmt.Errorf("purge tasks done over %d days ago: %w", olderThanDays, err)
+		return 0, fmt.Errorf("purge tasks deleted over %d days ago: %w", olderThanDays, err)
 	}
-	return deleted, nil
-}
-
-// CheckPurgeAge reports whether olderThanDays is an age PurgeDone accepts. Code that queues a purge
-// checks it first, so the caller hears about a bad age instead of the job failing later.
-func CheckPurgeAge(olderThanDays int) error {
-	if olderThanDays < 1 || olderThanDays > MaxPurgeAgeDays {
-		return apperr.Invalid("the age is out of range", apperr.FieldError{
-			Field: "older_than_days", Rule: "range", Message: fmt.Sprintf("must be from 1 to %d", MaxPurgeAgeDays),
-		})
-	}
-	return nil
+	return removed, nil
 }
 
 func cleanTitle(title string) (string, error) {

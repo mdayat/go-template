@@ -23,7 +23,7 @@ const ShutdownTimeout = 8 * time.Second
 // here and builds it in NewServices.
 type Services struct {
 	Tasks *task.Service
-	// PurgeReports is told when done tasks are purged (webhook.Discard when nobody listens).
+	// PurgeReports is told when deleted rows are purged (webhook.Discard when nobody listens).
 	PurgeReports EventSender
 }
 
@@ -48,15 +48,15 @@ func NewServices(queries *db.Queries, purgeReports EventSender) Services {
 func NewMux(logger zerolog.Logger, services Services) *queue.Mux {
 	mux := queue.NewMux()
 	mux.Use(logJobs(logger))
-	taskJobs{tasks: services.Tasks, purgeReports: services.PurgeReports}.mount(mux)
+	purgeJobs{tables: tablePurges(services), reports: services.PurgeReports}.mount(mux)
 	return mux
 }
 
-// Schedules returns every feature's jobs that run on a timetable. A new feature adds its schedule
-// function here.
+// Schedules returns every job that runs on a timetable. A feature with jobs of its own adds its
+// schedule function here.
 func Schedules() ([]queue.Schedule, error) {
 	var all []queue.Schedule
-	for _, schedules := range []func() ([]queue.Schedule, error){taskSchedules} {
+	for _, schedules := range []func() ([]queue.Schedule, error){purgeSchedules} {
 		s, err := schedules()
 		if err != nil {
 			return nil, err

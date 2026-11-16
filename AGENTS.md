@@ -47,10 +47,11 @@ In the worker:
 
 | Change | Where | Example |
 |---|---|---|
-| a background job: type name, payload, timeout, retries | `internal/jobs/<feature>.go` | `internal/jobs/tasks.go` |
-| job handlers, `func(ctx, payload []byte) error` | `internal/worker/<feature>.go`, mounted in `NewMux` (`worker.go`); services wired in `worker.Services` / `worker.NewServices` | `internal/worker/tasks.go` |
-| jobs on a timetable | the feature's schedule function in `internal/worker/<feature>.go`, returning `queue.Schedule`s, listed in `Schedules` (`worker.go`) | `taskSchedules` |
-| job tests | `internal/worker/<feature>_test.go`, through `testWorker(t)` | `internal/worker/tasks_test.go` |
+| a background job: type name, payload, timeout, retries | `internal/jobs/<feature>.go` | `internal/jobs/purge.go` |
+| job handlers, `func(ctx, payload []byte) error` | `internal/worker/<feature>.go`, mounted in `NewMux` (`worker.go`); services wired in `worker.Services` / `worker.NewServices` | `internal/worker/purge.go` |
+| jobs on a timetable | the feature's schedule function in `internal/worker/<feature>.go`, returning `queue.Schedule`s, listed in `Schedules` (`worker.go`) | `purgeSchedules` |
+| job tests | `internal/worker/<feature>_test.go`, through `testWorker(t)` | `internal/worker/purge_test.go` |
+| a new soft-deleted table | its service's `PurgeDeleted`, and a line in `tablePurges` (`internal/worker/purge.go`) | `tasks` |
 
 <!-- remove:end -->
 Never edit `internal/db/` (generated) or a migration that's already merged (write a new one).

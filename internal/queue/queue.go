@@ -11,7 +11,7 @@ import (
 
 // Job is one unit of background work.
 type Job struct {
-	// Type names the handler that runs the job, e.g. "tasks:purge_done".
+	// Type names the handler that runs the job, e.g. "deleted_rows:purge".
 	Type string
 	// Queue names the queue the job goes to; the worker reads the queues it's given.
 	Queue string

@@ -15,6 +15,7 @@ import (
 
 	"github.com/mdayat/go-template/internal/apperr"
 	"github.com/mdayat/go-template/internal/db"
+	"github.com/mdayat/go-template/internal/softdelete"
 	"github.com/mdayat/go-template/internal/testdb"
 )
 
@@ -535,37 +536,35 @@ func TestRestoreRejects(t *testing.T) {
 	})
 }
 
-// Removes the tasks deleted before the age, and the live ones done and last changed (not created)
-// before it; a second run removes nothing more.
-func TestPurgeDone(t *testing.T) {
+// Removes only the tasks deleted before the age, whatever their other dates; live tasks stay
+// however old. A second run removes nothing more.
+func TestPurgeDeleted(t *testing.T) {
 	t.Parallel()
 	s, pool := testService(t)
 	now := time.Now()
-	seedTask(t, pool, "done 31 days ago", true, now.Add(-31*day))
-	markDeleted(t, pool, seedTask(t, pool, "open, deleted 31 days ago", false, now.Add(-40*day)), now.Add(-31*day))
+	markDeleted(t, pool, seedTask(t, pool, "deleted 31 days ago", false, now.Add(-40*day)), now.Add(-31*day))
 	deletedLately := seedTask(t, pool, "done 40 days ago, deleted 29 days ago", true, now.Add(-40*day))
 	markDeleted(t, pool, deletedLately, now.Add(-29*day))
-	restored := seedTask(t, pool, "done 40 days ago, deleted and restored", true, now.Add(-40*day))
+	restored := seedTask(t, pool, "deleted 31 days ago, then restored", false, now.Add(-40*day))
 	markDeleted(t, pool, restored, now.Add(-31*day))
 	restored, err := s.Restore(t.Context(), restored.ID)
 	if err != nil {
 		t.Fatalf("Restore() error = %v", err)
 	}
 	keep := byTitle(
-		seedTask(t, pool, "done 29 days ago", true, now.Add(-29*day)),
+		seedTask(t, pool, "done 40 days ago", true, now.Add(-40*day)),
 		seedTask(t, pool, "open 40 days", false, now.Add(-40*day)),
-		touch(t, pool, seedTask(t, pool, "created 40 days ago, done 29 days ago", true, now.Add(-40*day)), now.Add(-29*day)),
 		deletedLately,
 		restored,
 	)
 
-	for run, want := range []int64{2, 0} {
-		deleted, err := s.PurgeDone(t.Context(), 30)
+	for run, want := range []int64{1, 0} {
+		removed, err := s.PurgeDeleted(t.Context(), 30)
 		if err != nil {
-			t.Fatalf("run %d: PurgeDone(30) error = %v", run+1, err)
+			t.Fatalf("run %d: PurgeDeleted(30) error = %v", run+1, err)
 		}
-		if deleted != want {
-			t.Errorf("run %d: PurgeDone(30) = %d, want %d", run+1, deleted, want)
+		if removed != want {
+			t.Errorf("run %d: PurgeDeleted(30) = %d, want %d", run+1, removed, want)
 		}
 		if diff := cmp.Diff(keep, tasksInDB(t, pool)); diff != "" {
 			t.Errorf("run %d: tasks in database mismatch (-want +got):\n%s", run+1, diff)
@@ -573,37 +572,21 @@ func TestPurgeDone(t *testing.T) {
 	}
 }
 
-func TestPurgeDoneChecksTheAge(t *testing.T) {
+// An age softdelete.CheckPurgeAge refuses removes nothing: 0 would remove a task deleted a moment
+// ago.
+func TestPurgeDeletedChecksTheAge(t *testing.T) {
 	t.Parallel()
 	s, pool := testService(t)
-	seeded := seedTask(t, pool, "done long ago", true, seedTime)
-	outOfRange := &apperr.Error{Kind: apperr.KindInvalid, Detail: "the age is out of range", Fields: []apperr.FieldError{
-		{Field: "older_than_days", Rule: "range", Message: fmt.Sprintf("must be from 1 to %d", MaxPurgeAgeDays)},
-	}}
+	seeded := seedTask(t, pool, "deleted long ago", false, seedTime)
+	markDeleted(t, pool, seeded, seedTime)
 
-	tests := []struct {
-		days int
-		want *apperr.Error
-	}{
-		{0, outOfRange},
-		{-1, outOfRange},
-		{MaxPurgeAgeDays + 1, outOfRange},
-		{MaxPurgeAgeDays, nil},
-		{1, nil},
-	}
-	for _, tt := range tests {
-		if diff := cmp.Diff(tt.want, appErrOf(CheckPurgeAge(tt.days))); diff != "" {
-			t.Errorf("CheckPurgeAge(%d) mismatch (-want +got):\n%s", tt.days, diff)
-		}
-		if tt.want == nil {
-			continue
-		}
-		_, err := s.PurgeDone(t.Context(), tt.days)
-		if diff := cmp.Diff(tt.want, appErrOf(err)); diff != "" {
-			t.Errorf("PurgeDone(%d) error = %v, mismatch (-want +got):\n%s", tt.days, err, diff)
+	for _, days := range []int{0, -1, softdelete.MaxPurgeAgeDays + 1} {
+		_, err := s.PurgeDeleted(t.Context(), days)
+		if e := appErrOf(err); e == nil || e.Kind != apperr.KindInvalid {
+			t.Errorf("PurgeDeleted(%d) error = %v, want invalid", days, err)
 		}
 	}
-	if diff := cmp.Diff([]Task{seeded}, tasksInDB(t, pool)); diff != "" {
-		t.Errorf("tasks in database mismatch (-want +got):\n%s", diff)
+	if diff := cmp.Diff([]string{"deleted long ago"}, deletedInDB(t, pool)); diff != "" {
+		t.Errorf("deleted tasks mismatch (-want +got):\n%s", diff)
 	}
 }

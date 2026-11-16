@@ -32,6 +32,7 @@ func parts() map[string][]string {
 		"worker": {
 			"cmd/worker", "internal/worker", "internal/jobs", "internal/queue", "internal/testqueue",
 			"internal/startup/redis.go", "internal/startup/redis_test.go", "docs/standards/worker.md",
+			"internal/api/purge.go", "internal/api/purge_test.go",
 		},
 		// A project keeping both parts needs neither the markers nor this tool.
 		"markers": {"scripts/remove"},
@@ -46,7 +47,7 @@ func mentions() map[string][]string {
 		"api": {"cmd/api", "internal/api", "http-api.md", "HTTP_ADDR", "testAPI", "/healthz"},
 		"worker": {
 			"cmd/worker", "internal/worker", "internal/jobs", "internal/queue", "testqueue", "worker.md",
-			"testWorker", "run-worker", "REDIS_URL", "PURGE_WEBHOOK_URL", "task-purges",
+			"testWorker", "run-worker", "REDIS_URL", "PURGE_WEBHOOK_URL", "deleted-row-purges",
 			"Valkey", "valkey", "VALKEY", "Redis", "redis", "asynq",
 		},
 	}

@@ -149,18 +149,14 @@ func (q *Queries) ListTasksAfter(ctx context.Context, arg ListTasksAfterParams) 
 	return items, nil
 }
 
-const purgeDoneTasks = `-- name: PurgeDoneTasks :execrows
+const purgeDeletedTasks = `-- name: PurgeDeletedTasks :execrows
 DELETE FROM tasks
 WHERE deleted_at < now() - $1::bigint * interval '1 day'
-   OR (deleted_at IS NULL
-       AND done
-       AND updated_at < now() - $1::bigint * interval '1 day')
 `
 
-// Removes for good the tasks deleted more than older_than_days ago, and the live tasks marked done
-// whose last change is more than older_than_days ago.
-func (q *Queries) PurgeDoneTasks(ctx context.Context, olderThanDays int64) (int64, error) {
-	result, err := q.db.Exec(ctx, purgeDoneTasks, olderThanDays)
+// Removes for good the tasks deleted more than older_than_days ago.
+func (q *Queries) PurgeDeletedTasks(ctx context.Context, olderThanDays int64) (int64, error) {
+	result, err := q.db.Exec(ctx, purgeDeletedTasks, olderThanDays)
 	if err != nil {
 		return 0, err
 	}
@@ -176,8 +172,7 @@ WHERE id = $1
 RETURNING id, title, done, created_at, updated_at, deleted_at
 `
 
-// RestoreTask brings back a deleted task, changed now: the purge ages a done task by its last
-// change, so it doesn't remove one the moment it's restored.
+// RestoreTask brings back a deleted task. A restore is a change, so it sets updated_at.
 func (q *Queries) RestoreTask(ctx context.Context, id uuid.UUID) (Task, error) {
 	row := q.db.QueryRow(ctx, restoreTask, id)
 	var i Task

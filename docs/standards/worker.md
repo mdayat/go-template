@@ -11,10 +11,11 @@ and a timetable (`queue.Schedule`). `internal/queue/valkey` implements them with
 `cmd/` picks it (lint: depguard). Moving to another queue is a new implementation and a few lines
 in `cmd/`, not edits across the features.
 
-The example: `tasks:purge_done` removes for good the tasks deleted or marked done long ago. The
-worker's scheduler queues it every day at midnight UTC.
+The example: `deleted_rows:purge` removes for good, from every soft-deleted table, the rows
+deleted more than 30 days ago ([database.md](database.md#soft-delete)). The worker's scheduler
+queues it every day at midnight UTC.
 <!-- remove:api -->
-`POST /task-purges` queues it on demand.
+`POST /deleted-row-purges` queues it on demand.
 <!-- remove:end -->
 
 ## Where things go
@@ -25,7 +26,7 @@ worker's scheduler queues it every day at midnight UTC.
 | the handler, `func(ctx, payload []byte) error` | `internal/worker/<feature>.go`, mounted in `NewMux` (`internal/worker/worker.go`) |
 | the rules it applies | the feature's service (`internal/task`), the same one every entry point calls |
 | wiring a new service | a field in `worker.Services` and a line in `worker.NewServices` |
-| a job that runs on a timetable | a `queue.Schedule` from the feature's schedule function (`taskSchedules`), listed in `Schedules` |
+| a job that runs on a timetable | a `queue.Schedule` from the feature's schedule function (`purgeSchedules`), listed in `Schedules` |
 | tests | `internal/worker/<feature>_test.go` |
 
 Everything that queues or runs a job builds and reads it only through `internal/jobs`, so they
@@ -42,9 +43,9 @@ asynq runs a job **at least once**, not exactly once. A job runs again when:
 - something queued it twice (a user clicked twice, two workers' schedulers fired).
 
 So write every job so that a second run changes nothing more than the first: delete or update by
-a condition (`WHERE done AND updated_at < ...`), not "add one"; check whether the email was already
-sent before sending it. Test it: run the job twice and check the rows after each run
-(`TestPurgeDoneTasks`).
+a condition (`WHERE deleted_at < ...`), not "add one"; check whether the email was already sent
+before sending it. Test it: run the job twice and check the rows after each run
+(`TestPurgeDeletedRows`).
 
 ## Payloads are a contract between versions
 
@@ -53,8 +54,11 @@ old worker, and the other way round. So:
 
 - a payload only **gains** fields; never rename or remove one, or change its meaning;
 - a handler accepts a payload without the newest fields (the zero value means "not sent"), and
-  ignores fields it doesn't know (`TestPurgeDoneTasksAcceptsUnknownFields`);
-- payloads hold IDs, not copies of rows: the row may have changed by the time the job runs.
+  ignores fields it doesn't know (`TestPurgeDeletedRowsAcceptsUnknownFields`);
+- payloads hold IDs, not copies of rows: the row may have changed by the time the job runs;
+- a job's type name is part of the contract too: jobs already queued carry the old name, and a
+  worker without a handler for it fails them. To rename one, handle both names until no job
+  with the old one is left, then drop it.
 
 Never put secrets or personal data in a payload: it sits in Valkey in plain text and shows in
 asynq's tools.
@@ -95,15 +99,15 @@ counts as failed; asynq retries it while attempts are left, whatever the handler
 
 On SIGTERM the worker stops its scheduler, stops taking jobs, and gives running ones 8 s to finish
 (`ShutdownTimeout` in `internal/worker/worker.go`, below Docker's default 10 s before a hard
-kill, the shortest common wait). Jobs still running then are put back in the queue and their contexts cancelled, which stops
-their queries. They run again on the next worker, from the start.
+kill, the shortest common wait). Jobs still running then are put back in the queue and their
+contexts cancelled, which stops their queries. They run again on the next worker, from the start.
 
 ## Logging
 
 `logJobs` (`internal/worker/logging.go`) writes one line per run:
 
 ```json
-{"level":"info","job_type":"tasks:purge_done","job_id":"88f4e9aa-7d1a-41b2-8eb3-0f22bb65802e",
+{"level":"info","job_type":"deleted_rows:purge","job_id":"88f4e9aa-7d1a-41b2-8eb3-0f22bb65802e",
  "queue":"default","attempt":1,"max_attempts":6,"duration_ms":6.3,"message":"job completed"}
 ```
 
@@ -115,8 +119,8 @@ their queries. They run again on the next worker, from the start.
 
 A failed run carries `error.message` (and `error.stack_trace` for a panic) on the same line. Inside
 a handler, `zerolog.Ctx(ctx)` is the job's logger: lines logged through it carry `job_type` and
-`job_id`. Log on a line of your own only what's worth finding later (`"done tasks purged"` with the
-count), never the payload.
+`job_id`. Log on a line of your own only what's worth finding later (`"deleted rows purged"` with
+each table's count), never the payload.
 
 asynq also logs its own events (starting, shutting down, "Retry exhausted for task", a job put
 back in the queue), marked `"source":"asynq"`. Alert on the `job completed` lines, not on those.
@@ -140,7 +144,7 @@ outbox, queues the jobs and deletes the rows it queued.
 <!-- remove:end -->
 ## Scheduled jobs
 
-Each feature's schedule function (`taskSchedules`) returns its jobs that run on a timetable, as
+Each schedule function (`purgeSchedules`) returns its jobs that run on a timetable, as
 `queue.Schedule`s with cron specs in UTC (`"@daily"`, `"0 3 * * *"`). Every worker process runs a
 scheduler, so with three workers each scheduled job is queued three times at the same moment;
 `Unique` (required) lets only the first through. Pick it shorter than the time between runs (an

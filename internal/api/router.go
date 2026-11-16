@@ -70,13 +70,10 @@ func NewRouter(logger zerolog.Logger, services Services) *chi.Mux {
 	router := newBaseRouter(logger)
 	// One decoder for every feature: the validator caches what it learns about each type.
 	decoder := newBodyDecoder()
-	taskRoutes{
-		tasks: services.Tasks,
-		// remove:worker
-		jobs: services.Jobs,
-		// remove:end
-		decoder: decoder,
-	}.mount(router)
+	taskRoutes{tasks: services.Tasks, decoder: decoder}.mount(router)
+	// remove:worker
+	purgeRoutes{jobs: services.Jobs, decoder: decoder}.mount(router)
+	// remove:end
 	return router
 }
 

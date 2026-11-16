@@ -220,3 +220,21 @@ func randomSuffix() string {
 func ident(name string) string {
 	return pgx.Identifier{name}.Sanitize()
 }
+
+// SoftDeletedTables returns, sorted, every table in pool's database with a deleted_at column: the
+// tables each soft-delete check must list.
+func SoftDeletedTables(tb testing.TB, pool *pgxpool.Pool) []string {
+	tb.Helper()
+	rows, err := pool.Query(tb.Context(), `
+		SELECT table_name FROM information_schema.columns
+		WHERE table_schema = 'public' AND column_name = 'deleted_at'
+		ORDER BY table_name`)
+	if err != nil {
+		tb.Fatalf("testdb: list soft-deleted tables: %v", err)
+	}
+	tables, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		tb.Fatalf("testdb: list soft-deleted tables: %v", err)
+	}
+	return tables
+}

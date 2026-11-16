@@ -7,12 +7,14 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog"
@@ -25,18 +27,25 @@ import (
 	"github.com/mdayat/go-template/internal/webhook"
 )
 
-// seedTask inserts a task last changed age ago.
-func seedTask(t *testing.T, pool *pgxpool.Pool, title string, done bool, age time.Duration) {
+// seedTask inserts a task made and last changed 40 days ago, done, and deleted deletedAgo ago, or
+// live when deletedAgo is 0. Only the delete's age decides a purge.
+func seedTask(t *testing.T, pool *pgxpool.Pool, title string, deletedAgo time.Duration) {
 	t.Helper()
+	var deletedAt *time.Time
+	if deletedAgo > 0 {
+		at := time.Now().Add(-deletedAgo)
+		deletedAt = &at
+	}
 	_, err := pool.Exec(t.Context(),
-		"INSERT INTO tasks (title, done, created_at, updated_at) VALUES ($1, $2, now() - $3::interval, now() - $3::interval)",
-		title, done, age)
+		`INSERT INTO tasks (title, done, created_at, updated_at, deleted_at)
+		 VALUES ($1, true, now() - interval '40 days', now() - interval '40 days', $2)`,
+		title, deletedAt)
 	if err != nil {
 		t.Fatalf("seed task: %v", err)
 	}
 }
 
-// taskTitles returns the title of every task in the database, sorted.
+// taskTitles returns the title of every task in the database, deleted ones too, sorted.
 func taskTitles(t *testing.T, pool *pgxpool.Pool) []string {
 	t.Helper()
 	rows, err := pool.Query(t.Context(), "SELECT title FROM tasks ORDER BY title")
@@ -53,25 +62,25 @@ func taskTitles(t *testing.T, pool *pgxpool.Pool) []string {
 // purgePayload returns the payload queued for a purge.
 func purgePayload(t *testing.T, olderThanDays int) []byte {
 	t.Helper()
-	job, err := jobs.NewPurgeDoneTasks(olderThanDays)
+	job, err := jobs.NewPurgeDeletedRows(olderThanDays)
 	if err != nil {
-		t.Fatalf("NewPurgeDoneTasks(%d) error = %v", olderThanDays, err)
+		t.Fatalf("NewPurgeDeletedRows(%d) error = %v", olderThanDays, err)
 	}
 	return job.Payload
 }
 
-// Deletes only tasks that are done and older than the age, and a second run changes nothing: asynq
-// runs a job again when the worker stops mid-job, and the same purge can be queued twice.
-func TestPurgeDoneTasks(t *testing.T) {
+// Removes only rows deleted before the age, and a second run changes nothing: asynq runs a job
+// again when the worker stops mid-job, and the same purge can be queued twice.
+func TestPurgeDeletedRows(t *testing.T) {
 	t.Parallel()
 	mux, pool := testWorker(t)
-	seedTask(t, pool, "done 31 days ago", true, 31*day)
-	seedTask(t, pool, "done 29 days ago", true, 29*day)
-	seedTask(t, pool, "open 40 days", false, 40*day)
-	want := []string{"done 29 days ago", "open 40 days"}
+	seedTask(t, pool, "deleted 31 days ago", 31*day)
+	seedTask(t, pool, "deleted 29 days ago", 29*day)
+	seedTask(t, pool, "live, done 40 days ago", 0)
+	want := []string{"deleted 29 days ago", "live, done 40 days ago"}
 
 	for _, run := range []string{"first", "second"} {
-		if err := mux.Process(t.Context(), jobs.TypePurgeDoneTasks, purgePayload(t, 30)); err != nil {
+		if err := mux.Process(t.Context(), jobs.TypePurgeDeletedRows, purgePayload(t, 30)); err != nil {
 			t.Fatalf("%s purge error = %v", run, err)
 		}
 		if diff := cmp.Diff(want, taskTitles(t, pool)); diff != "" {
@@ -81,13 +90,13 @@ func TestPurgeDoneTasks(t *testing.T) {
 }
 
 // A newer version may add payload fields this worker doesn't know yet; the job still runs.
-func TestPurgeDoneTasksAcceptsUnknownFields(t *testing.T) {
+func TestPurgeDeletedRowsAcceptsUnknownFields(t *testing.T) {
 	t.Parallel()
 	mux, pool := testWorker(t)
-	seedTask(t, pool, "done 31 days ago", true, 31*day)
+	seedTask(t, pool, "deleted 31 days ago", 31*day)
 
 	payload := []byte(`{"older_than_days":30,"added_later":true}`)
-	if err := mux.Process(t.Context(), jobs.TypePurgeDoneTasks, payload); err != nil {
+	if err := mux.Process(t.Context(), jobs.TypePurgeDeletedRows, payload); err != nil {
 		t.Fatalf("purge error = %v", err)
 	}
 	if got := taskTitles(t, pool); len(got) != 0 {
@@ -95,8 +104,8 @@ func TestPurgeDoneTasksAcceptsUnknownFields(t *testing.T) {
 	}
 }
 
-// A payload that can't work fails without retries, and deletes nothing.
-func TestPurgeDoneTasksRejects(t *testing.T) {
+// A payload that can't work fails without retries, and removes nothing.
+func TestPurgeDeletedRowsRejects(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -112,17 +121,37 @@ func TestPurgeDoneTasksRejects(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			mux, pool := testWorker(t)
-			seedTask(t, pool, "done 31 days ago", true, 31*day)
+			seedTask(t, pool, "deleted 31 days ago", 31*day)
 
-			err := mux.Process(t.Context(), jobs.TypePurgeDoneTasks, []byte(tt.payload))
+			err := mux.Process(t.Context(), jobs.TypePurgeDeletedRows, []byte(tt.payload))
 
 			if !errors.Is(err, queue.ErrNoRetry) {
 				t.Errorf("purge error = %v, want one wrapping queue.ErrNoRetry", err)
 			}
-			if diff := cmp.Diff([]string{"done 31 days ago"}, taskTitles(t, pool)); diff != "" {
+			if diff := cmp.Diff([]string{"deleted 31 days ago"}, taskTitles(t, pool)); diff != "" {
 				t.Errorf("tasks after purge mismatch (-want +got):\n%s", diff)
 			}
 		})
+	}
+}
+
+// With no soft-deleted table, no table's purge checks the age: the job must, or it reports a purge
+// that never ran.
+func TestPurgeDeletedRowsWithNoTablesRejectsABadAge(t *testing.T) {
+	t.Parallel()
+	server, received := testWebhook(t, http.StatusNoContent)
+	mux := queue.NewMux()
+	// As NewMux does: logJobs turns an apperr kind into a failure that isn't retried.
+	mux.Use(logJobs(zerolog.Nop()))
+	purgeJobs{reports: webhook.NewHTTPSender(httpclient.New(5*time.Second), server.URL)}.mount(mux)
+
+	err := mux.Process(t.Context(), jobs.TypePurgeDeletedRows, []byte(`{"older_than_days":0}`))
+
+	if !errors.Is(err, queue.ErrNoRetry) {
+		t.Errorf("purge error = %v, want one wrapping queue.ErrNoRetry", err)
+	}
+	if len(received) != 0 {
+		t.Errorf("webhook got %d reports, want none", len(received))
 	}
 }
 
@@ -138,14 +167,14 @@ func TestSchedulesHoldTheDailyPurge(t *testing.T) {
 	want := queue.Schedule{
 		Spec: "@daily",
 		Job: queue.Job{
-			Type: jobs.TypePurgeDoneTasks, Queue: jobs.Queue, Payload: []byte(`{"older_than_days":30}`),
+			Type: jobs.TypePurgeDeletedRows, Queue: jobs.Queue, Payload: []byte(`{"older_than_days":30}`),
 			Timeout: 5 * time.Minute, MaxRetries: 5,
 		},
 		Unique: time.Hour,
 	}
 	var got []queue.Schedule
 	for _, s := range schedules {
-		if s.Job.Type == jobs.TypePurgeDoneTasks {
+		if s.Job.Type == jobs.TypePurgeDeletedRows {
 			got = append(got, s)
 		}
 	}
@@ -182,15 +211,15 @@ func testWebhook(t *testing.T, replies ...int) (*httptest.Server, chan receivedR
 
 // The purge reports what's now true, with the job's ID as the idempotency key; when the webhook
 // fails, the job fails to be retried, and the retry reports the same thing with the same key.
-func TestPurgeDoneTasksReportsToTheWebhook(t *testing.T) {
+func TestPurgeDeletedRowsReportsToTheWebhook(t *testing.T) {
 	t.Parallel()
 	server, received := testWebhook(t, http.StatusServiceUnavailable, http.StatusNoContent)
 	mux, pool := testWorkerReportingTo(t, server.URL, 5*time.Second)
-	seedTask(t, pool, "done 31 days ago", true, 31*day)
-	ctx := queue.WithRun(t.Context(), queue.Run{ID: "job-1", Type: jobs.TypePurgeDoneTasks, Attempt: 1, MaxAttempts: 6})
+	seedTask(t, pool, "deleted 31 days ago", 31*day)
+	ctx := queue.WithRun(t.Context(), queue.Run{ID: "job-1", Type: jobs.TypePurgeDeletedRows, Attempt: 1, MaxAttempts: 6})
 
-	first := mux.Process(ctx, jobs.TypePurgeDoneTasks, purgePayload(t, 30))
-	second := mux.Process(ctx, jobs.TypePurgeDoneTasks, purgePayload(t, 30))
+	first := mux.Process(ctx, jobs.TypePurgeDeletedRows, purgePayload(t, 30))
+	second := mux.Process(ctx, jobs.TypePurgeDeletedRows, purgePayload(t, 30))
 
 	if first == nil || errors.Is(first, queue.ErrNoRetry) {
 		t.Errorf("first purge error = %v, want one that's retried: the webhook replied 503", first)
@@ -200,7 +229,7 @@ func TestPurgeDoneTasksReportsToTheWebhook(t *testing.T) {
 	}
 	want := receivedReport{
 		Method: http.MethodPost, ContentType: "application/json", IdempotencyKey: "job-1",
-		Body: `{"event":"tasks.purged","older_than_days":30}`,
+		Body: `{"event":"deleted_rows.purged","older_than_days":30}`,
 	}
 	for _, run := range []string{"first", "second"} {
 		if diff := cmp.Diff(want, <-received); diff != "" {
@@ -214,7 +243,7 @@ func TestPurgeDoneTasksReportsToTheWebhook(t *testing.T) {
 
 // A webhook failure decides whether the job is retried: a retry can't fix a 4xx other than 408 and
 // 429, so the job fails for good; anything else is retried.
-func TestPurgeDoneTasksWebhookFailures(t *testing.T) {
+func TestPurgeDeletedRowsWebhookFailures(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -233,7 +262,7 @@ func TestPurgeDoneTasksWebhookFailures(t *testing.T) {
 			server, _ := testWebhook(t, tt.reply)
 			mux, _ := testWorkerReportingTo(t, server.URL, 5*time.Second)
 
-			err := mux.Process(t.Context(), jobs.TypePurgeDoneTasks, purgePayload(t, 30))
+			err := mux.Process(t.Context(), jobs.TypePurgeDeletedRows, purgePayload(t, 30))
 
 			if err == nil || errors.Is(err, queue.ErrNoRetry) != tt.wantNoRetry {
 				t.Errorf("purge error = %v, want an error with ErrNoRetry = %v", err, tt.wantNoRetry)
@@ -243,7 +272,7 @@ func TestPurgeDoneTasksWebhookFailures(t *testing.T) {
 }
 
 // A webhook that doesn't answer is cut off at the client's time limit, and the job is retried.
-func TestPurgeDoneTasksSlowWebhookIsCutOff(t *testing.T) {
+func TestPurgeDeletedRowsSlowWebhookIsCutOff(t *testing.T) {
 	t.Parallel()
 	release := make(chan struct{})
 	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { <-release }))
@@ -257,7 +286,7 @@ func TestPurgeDoneTasksSlowWebhookIsCutOff(t *testing.T) {
 	t.Cleanup(cancel)
 
 	start := time.Now()
-	err := mux.Process(ctx, jobs.TypePurgeDoneTasks, purgePayload(t, 30))
+	err := mux.Process(ctx, jobs.TypePurgeDeletedRows, purgePayload(t, 30))
 
 	if err == nil || errors.Is(err, queue.ErrNoRetry) {
 		t.Errorf("purge error = %v, want one that's retried", err)
@@ -267,6 +296,22 @@ func TestPurgeDoneTasksSlowWebhookIsCutOff(t *testing.T) {
 	}
 	if strings.Contains(fmt.Sprint(err), server.URL) {
 		t.Errorf("purge error = %v, want it without the webhook's URL", err)
+	}
+}
+
+// Every table with deleted_at is purged: one left out of tablePurges keeps its deleted rows
+// forever.
+func TestEverySoftDeletedTableIsPurged(t *testing.T) {
+	t.Parallel()
+	pool := testdb.New(t)
+	var purged []string
+	for _, tp := range tablePurges(NewServices(db.New(pool), webhook.Discard{})) {
+		purged = append(purged, tp.table)
+	}
+	slices.Sort(purged)
+
+	if diff := cmp.Diff(testdb.SoftDeletedTables(t, pool), purged, cmpopts.EquateEmpty()); diff != "" {
+		t.Errorf("tables with deleted_at (-) vs tablePurges (+):\n%s", diff)
 	}
 }
 

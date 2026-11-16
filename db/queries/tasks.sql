@@ -44,8 +44,7 @@ SET deleted_at = now()
 WHERE id = $1
   AND deleted_at IS NULL;
 
--- RestoreTask brings back a deleted task, changed now: the purge ages a done task by its last
--- change, so it doesn't remove one the moment it's restored.
+-- RestoreTask brings back a deleted task. A restore is a change, so it sets updated_at.
 -- name: RestoreTask :one
 UPDATE tasks
 SET deleted_at = NULL,
@@ -54,11 +53,7 @@ WHERE id = $1
   AND deleted_at IS NOT NULL
 RETURNING *;
 
--- Removes for good the tasks deleted more than older_than_days ago, and the live tasks marked done
--- whose last change is more than older_than_days ago.
--- name: PurgeDoneTasks :execrows
+-- Removes for good the tasks deleted more than older_than_days ago.
+-- name: PurgeDeletedTasks :execrows
 DELETE FROM tasks
-WHERE deleted_at < now() - sqlc.arg('older_than_days')::bigint * interval '1 day'
-   OR (deleted_at IS NULL
-       AND done
-       AND updated_at < now() - sqlc.arg('older_than_days')::bigint * interval '1 day');
+WHERE deleted_at < now() - sqlc.arg('older_than_days')::bigint * interval '1 day';

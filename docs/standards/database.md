@@ -84,12 +84,11 @@ A deleted row is still in the table, so every rule below exists to keep it out o
   `INSERT ... ON CONFLICT (title)` must repeat it (`ON CONFLICT (title) WHERE deleted_at IS NULL`),
   or Postgres finds no index to match and fails.
 - **Restoring can break a unique rule** (a live row took the value meanwhile): it's a `Conflict`,
-  and the row stays deleted. A restore is a change: it sets `updated_at`, so work that ages rows
-  by their last change (the purge below) doesn't remove one just brought back.
+  and the row stays deleted. A restore is a change, so it sets `updated_at`.
 - **`ON DELETE CASCADE` doesn't fire**: nothing is deleted. A child that must go with its parent is
   marked in the same transaction, or its queries join the parent and skip deleted parents.
 - **Deleted rows are removed for good after a while** (30 days is common; for tasks,
-  `task.Service.PurgeDone` does it): tables keep growing otherwise, and personal data shouldn't
+  `task.Service.PurgeDeleted` does it): tables keep growing otherwise, and personal data shouldn't
   stay once a user asked to delete it (privacy laws such as the GDPR give about a month). Records
   the law says to keep (payments, invoices) aren't removed on that timetable.
 - **Adding `deleted_at` to a table in use:** while the deploy runs, the old app still shows rows

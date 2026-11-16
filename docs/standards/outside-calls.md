@@ -8,7 +8,7 @@ a call that timed out on our side may still have worked on theirs.
 The example is `internal/webhook`, which POSTs events to a URL another system gave us, with its
 tests; it stays whichever programs a project keeps.
 <!-- remove:worker -->
-The worker's purge job uses it: after removing old deleted and done tasks, it reports to
+The worker's purge job uses it: after removing old deleted rows for good, it reports to
 `PURGE_WEBHOOK_URL` (optional).
 <!-- remove:end -->
 
@@ -54,7 +54,7 @@ with growing delays. A failure a retry can't fix is marked `queue.ErrNoRetry`, s
 once instead of using up its tries:
 
 ```go
-if err := tj.purgeReports.Send(ctx, run.ID, event); err != nil {
+if err := pj.reports.Send(ctx, run.ID, event); err != nil {
 	if !httpclient.Retryable(err) {
 		return fmt.Errorf("report purge: %w: %w", err, queue.ErrNoRetry)
 	}
@@ -96,8 +96,8 @@ call that timed out may have worked on the other side. So:
 
 <!-- remove:worker -->
 The worker's purge does all three. It deletes by a condition, so a second run deletes nothing. It
-reports "tasks deleted or done over 30 days ago are gone", not how many it deleted: after a
-failed report the job runs again, deletes nothing, and a count would say 0. Its key is the job's ID
+reports "rows deleted over 30 days ago are gone", not how many it removed: after a failed
+report the job runs again, removes nothing, and a count would say 0. Its key is the job's ID
 (`queue.RunFrom(ctx)`), the same on every try.
 
 <!-- remove:end -->
@@ -120,6 +120,6 @@ reply: success, a failure that's retried, one that isn't, a redirect, and a serv
 answer. Give a test of a time limit a deadline of its own, so a missing limit fails the test
 instead of hanging it. See `internal/httpclient` and `internal/webhook`'s tests.
 <!-- remove:worker -->
-The purge's are `TestPurgeDoneTasksReportsToTheWebhook` and its neighbours in
-`internal/worker/tasks_test.go`.
+The purge's are `TestPurgeDeletedRowsReportsToTheWebhook` and its neighbours in
+`internal/worker/purge_test.go`.
 <!-- remove:end -->
