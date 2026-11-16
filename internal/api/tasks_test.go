@@ -20,12 +20,14 @@ import (
 	"github.com/mdayat/go-template/internal/task"
 )
 
-// seedTask inserts a task straight into the database, made createdAfter seedTime.
+// seedTask inserts a task owned by the signed-in test user straight into the database, made
+// createdAfter seedTime.
 func seedTask(t *testing.T, pool *pgxpool.Pool, title string, createdAfter time.Duration) db.Task {
 	t.Helper()
 	rows, err := pool.Query(t.Context(),
-		`INSERT INTO tasks (title, created_at, updated_at) VALUES ($1, $2, $2)
-		 RETURNING id, title, done, created_at, updated_at, deleted_at`, title, seedTime.Add(createdAfter))
+		`INSERT INTO tasks (title, created_at, updated_at, owner_id) VALUES ($1, $2, $2, $3)
+		 RETURNING id, title, done, created_at, updated_at, deleted_at, owner_id`,
+		title, seedTime.Add(createdAfter), testUserID(t, pool))
 	if err != nil {
 		t.Fatalf("seed task: %v", err)
 	}
@@ -40,7 +42,8 @@ func seedTask(t *testing.T, pool *pgxpool.Pool, title string, createdAfter time.
 func markDeleted(t *testing.T, pool *pgxpool.Pool, task db.Task) db.Task {
 	t.Helper()
 	rows, err := pool.Query(t.Context(),
-		"UPDATE tasks SET deleted_at = now() WHERE id = $1 RETURNING id, title, done, created_at, updated_at, deleted_at", task.ID)
+		"UPDATE tasks SET deleted_at = now() WHERE id = $1 RETURNING id, title, done, created_at, updated_at, deleted_at, owner_id",
+		task.ID)
 	if err != nil {
 		t.Fatalf("mark task deleted: %v", err)
 	}
@@ -54,7 +57,7 @@ func markDeleted(t *testing.T, pool *pgxpool.Pool, task db.Task) db.Task {
 // tasksInDB returns every task in the database, deleted ones too, by title, then oldest first.
 func tasksInDB(t *testing.T, pool *pgxpool.Pool) []db.Task {
 	t.Helper()
-	rows, err := pool.Query(t.Context(), "SELECT id, title, done, created_at, updated_at, deleted_at FROM tasks ORDER BY title, created_at")
+	rows, err := pool.Query(t.Context(), "SELECT id, title, done, created_at, updated_at, deleted_at, owner_id FROM tasks ORDER BY title, created_at")
 	if err != nil {
 		t.Fatalf("read tasks: %v", err)
 	}
@@ -66,7 +69,9 @@ func tasksInDB(t *testing.T, pool *pgxpool.Pool) []db.Task {
 }
 
 func asReply(row db.Task) taskResponse {
-	return taskResponse{ID: row.ID, Title: row.Title, Done: row.Done, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt}
+	return taskResponse{
+		ID: row.ID, Title: row.Title, Done: row.Done, OwnerID: row.OwnerID, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
+	}
 }
 
 // The tasks routes are behind the sign-in check (its cases are in auth_test.go).
@@ -87,6 +92,35 @@ func TestTasksNeedSignIn(t *testing.T) {
 		if rec.Code != http.StatusUnauthorized {
 			t.Errorf("%s %s without a valid token = %d, want 401", route.method, route.target, rec.Code)
 		}
+	}
+}
+
+// Another user's task is a 404, as if it didn't exist; an admin gets it, with its owner.
+func TestTasksOfOthers(t *testing.T) {
+	t.Parallel()
+	router, pool := testAPI(t)
+	var bob uuid.UUID
+	if err := pool.QueryRow(t.Context(), "INSERT INTO users (auth_subject) VALUES ('bob') RETURNING id").Scan(&bob); err != nil {
+		t.Fatal(err)
+	}
+	var id uuid.UUID
+	if err := pool.QueryRow(t.Context(), "INSERT INTO tasks (title, owner_id) VALUES ('bob''s', $1) RETURNING id", bob).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+
+	testUser(t, pool, false)
+	rec := send(t, router, http.MethodGet, "/tasks/"+id.String(), "")
+	want := problemReply{Status: http.StatusNotFound, Detail: "task not found"}
+	if diff := cmp.Diff(want, readProblem(t, rec)); diff != "" {
+		t.Errorf("GET /tasks/{bob's} as a user reply mismatch (-want +got):\n%s", diff)
+	}
+
+	testUser(t, pool, true)
+	rec = send(t, router, http.MethodGet, "/tasks/"+id.String(), "")
+	var got taskResponse
+	decodeReply(t, rec, &got)
+	if rec.Code != http.StatusOK || got.ID != id || got.OwnerID == nil || *got.OwnerID != bob {
+		t.Errorf("GET /tasks/{bob's} as an admin = %d %+v, want 200 with bob as owner", rec.Code, got)
 	}
 }
 
@@ -372,7 +406,9 @@ func TestUpdateTask(t *testing.T) {
 			if unchanged := got.UpdatedAt.Equal(before.UpdatedAt); unchanged != tt.wantUnchanged {
 				t.Errorf("updated_at = %s (was %s), want unchanged = %v", got.UpdatedAt, before.UpdatedAt, tt.wantUnchanged)
 			}
-			after := db.Task{ID: got.ID, Title: got.Title, Done: got.Done, CreatedAt: got.CreatedAt, UpdatedAt: got.UpdatedAt}
+			after := db.Task{
+				ID: got.ID, Title: got.Title, Done: got.Done, CreatedAt: got.CreatedAt, UpdatedAt: got.UpdatedAt, OwnerID: got.OwnerID,
+			}
 			if diff := cmp.Diff(sortedByTitle(after, other), tasksInDB(t, pool)); diff != "" {
 				t.Errorf("tasks in database after PATCH mismatch (-want +got):\n%s", diff)
 			}

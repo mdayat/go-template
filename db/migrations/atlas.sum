@@ -1,4 +1,5 @@
-h1:lnFySqhx+/LuPAyhj1L8qvt/GTt9wlbR+48LpITqF6s=
+h1:O7OBj24eGvF0A9bmDJRg+a5oy4USp3cXEFKXUfetFsU=
 20261112123727_create_tasks.sql h1:9aHz5WjzKepq+U+SxsPDWZMIZbIyFPMNISkj6Y+HX7A=
 20261116060416_soft_delete_tasks.sql h1:saiq9smNj1PswZiHgWG0D4VvNh3vZXZHD8BgrbZ/yr4=
 20261116113449_create_users.sql h1:7+mns80Dbj9gzVlKy8NkOkwFLMzdiZ5jR2pBllE3XI4=
+20261116121437_task_owners.sql h1:pMPDmAKnMzDvzayCg1vPqLoeTzlUrB4+RQCO6A1AuT4=

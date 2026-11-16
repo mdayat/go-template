@@ -106,6 +106,8 @@ func problemFor(err error) problem {
 		return newProblem(http.StatusConflict, appErr.Detail)
 	case apperr.KindUnauthenticated:
 		return newProblem(http.StatusUnauthorized, appErr.Detail)
+	case apperr.KindForbidden:
+		return newProblem(http.StatusForbidden, appErr.Detail)
 	}
 	// After the switch, not as its default: with no default case the linter (exhaustive) fails until
 	// a new kind gets its own case. Only a zero or made-up Kind gets here.

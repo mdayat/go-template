@@ -41,6 +41,12 @@ migration must work with the code before it **and** after it. Atlas Community do
   statement.
 - A new foreign key or `CHECK` on a big table: add it `NOT VALID`, then `VALIDATE CONSTRAINT` in a
   later migration, so the table isn't locked while every row is checked.
+- A new column the new code fills (an owner, say) is empty on every row the old app writes during
+  the deploy, and only the old app knew what belonged there. If those rows matter, first deploy
+  code that writes the value into a column added earlier, then the code that relies on it.
+
+The template's own migrations build indexes and add keys the plain way: its table is small. Don't
+copy that to a big table; follow the steps above.
 
 ## Queries
 
@@ -54,6 +60,12 @@ migration must work with the code before it **and** after it. Atlas Community do
   rows there are.
 - Postgres `text` can't hold the NUL character (JSON `"\u0000"`), and an insert with one fails as
   an unexpected error. Reject it in the service with the field's other rules (`cleanTitle`).
+- Rows owned by a user (`owner_id`): a query on one row by ID takes the owner and filters
+  `(sqlc.narg('owner_id')::uuid IS NULL OR owner_id = sqlc.narg('owner_id'))`, NULL meaning an
+  admin's (everyone's). A list doesn't: give the owner's list and the admin's list a query each,
+  each with its own index, or Postgres may settle on one plan for both and stop using the owner
+  index (`ListOwnerTasks`, `ListTasks`). Unique rules include the owner, so one user's values
+  neither block another's nor show through a duplicate error.
 - Business rules that must hold even when two requests race (unique titles, positive balances)
   are constraints in the schema, not a "check, then write" in Go. Name every constraint: the service
   matches it by name ([errors.md](errors.md#turning-driver-errors-into-kinds)).

@@ -15,6 +15,7 @@ const (
 	KindConflict // the request clashes with current state (a duplicate, a stale version)
 	// remove:api
 	KindUnauthenticated // no one is signed in, or the proof of who it is was refused
+	KindForbidden       // signed in, but not allowed to do this
 	// remove:end
 )
 
@@ -63,6 +64,13 @@ func Conflict(detail string) error {
 // refused (expired, forged): that helps an attacker; wrap the cause for the log instead.
 func Unauthenticated(detail string) error {
 	return &Error{Kind: KindUnauthenticated, Detail: detail}
+}
+
+// Forbidden reports a signed-in user asking for what they're not allowed to do. Use it only where
+// the thing's existence is no secret (an action, a page); for someone else's row, use NotFound, or
+// the reply confirms the row exists.
+func Forbidden(detail string) error {
+	return &Error{Kind: KindForbidden, Detail: detail}
 }
 
 // remove:end

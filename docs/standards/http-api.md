@@ -74,14 +74,13 @@ Every route but `/healthz` needs someone signed in: the request carries
 | missing, another scheme, or refused (forged, expired, for another service) | 401 with `WWW-Authenticate: Bearer`, the same detail whatever was wrong; the reason is on the log line |
 | can't be checked (the provider's keys never arrived) | 503: our outage, which a client may retry |
 
-The provider only proves who someone is; what they may do is decided on our own data, never on
-the token's claims, so changing provider changes no rule. `authenticate` turns the provider's ID
-for the person (the token's subject) into our user (`internal/user`, the `users` table), adding
-them on their first request; other tables point at `users.id`, never at the provider's ID.
-Moving to another provider means pointing each user's `auth_subject` at their new ID there, once;
-their rows and rights stay. Making someone an admin (`is_admin`, for rules that give admins more)
-is done by hand, after their first sign-in (locally, their ID is the `user=` you gave
-`make dev-token`):
+The provider only proves who someone is; what they may do is decided on our own data, never on the
+token's claims, so changing provider changes no rule. `authenticate` turns the provider's ID for the
+person (the token's subject) into our user (`internal/user`, the `users` table), adding them on
+their first request; other tables point at `users.id`, never at the provider's ID. Moving to another
+provider means pointing each user's `auth_subject` at their new ID there, once; their rows and
+rights stay. Making someone an admin (`is_admin`: they see and change everyone's rows) is done by
+hand, after their first sign-in (locally, their ID is the `user=` you gave `make dev-token`):
 
 ```sql
 UPDATE users SET is_admin = true WHERE auth_subject = '<their ID at the provider>';
@@ -100,7 +99,19 @@ mapper. Another kind (opaque tokens looked up in a table, say) is another packag
   group in `NewRouter`, and checks its caller its own way.
 - Endpoint tests sign in through the real check: `testAPI` signs every request in as
   `testSubject`, with a token from a test issuer (`internal/authtest`), unless the test sets its
-  own `Authorization` header.
+  own `Authorization` header. `testUser(t, pool, admin)` records that user (as an admin or not)
+  and returns their ID, for seeding rows they own.
+
+### Who may do what
+
+A handler gets the signed-in user with `currentUser(r)` and passes it to the service, which
+decides: the rules live in one place, the same for every entry point. In the tasks example:
+
+- A user sees and changes only their own tasks. Someone else's is a 404, the same reply as one
+  that doesn't exist: a 403 would confirm it does. Replies show the task's `owner_id`.
+- An admin (`is_admin`) sees and changes everyone's, tasks from before owners included.
+- An action that's no secret but not for everyone (an admin-only endpoint) is a 403,
+  `apperr.Forbidden`.
 
 ## IDs and paging
 

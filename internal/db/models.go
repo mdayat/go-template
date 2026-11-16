@@ -17,6 +17,7 @@ type Task struct {
 	CreatedAt time.Time
 	UpdatedAt time.Time
 	DeletedAt *time.Time
+	OwnerID   *uuid.UUID
 }
 
 type User struct {

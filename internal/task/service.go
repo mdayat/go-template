@@ -16,6 +16,7 @@ import (
 	"github.com/mdayat/go-template/internal/db"
 	"github.com/mdayat/go-template/internal/postgres"
 	"github.com/mdayat/go-template/internal/softdelete"
+	"github.com/mdayat/go-template/internal/user"
 )
 
 const (
@@ -31,9 +32,11 @@ const (
 
 // Task is a to-do item.
 type Task struct {
-	ID        uuid.UUID
-	Title     string
-	Done      bool
+	ID    uuid.UUID
+	Title string
+	Done  bool
+	// OwnerID is who made it; nil for a task from before tasks had owners.
+	OwnerID   *uuid.UUID
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
@@ -56,7 +59,9 @@ type Changes struct {
 	Done  *bool
 }
 
-// Service creates, reads, updates, deletes and restores tasks.
+// Service creates, reads, updates, deletes and restores tasks. Each method acts for a signed-in
+// user, who sees and changes only their own tasks; an admin, everyone's. Someone else's task is
+// NotFound, never forbidden: that would confirm it exists.
 type Service struct {
 	queries *db.Queries
 }
@@ -66,31 +71,32 @@ func NewService(queries *db.Queries) *Service {
 	return &Service{queries: queries}
 }
 
-// Create adds a task. The title is trimmed and must be 1 to MaxTitleLength characters and unique.
-func (s *Service) Create(ctx context.Context, title string) (Task, error) {
+// Create adds a task owned by u. The title is trimmed and must be 1 to MaxTitleLength characters,
+// and unique among u's tasks.
+func (s *Service) Create(ctx context.Context, u user.User, title string) (Task, error) {
 	title, err := cleanTitle(title)
 	if err != nil {
 		return Task{}, err
 	}
-	row, err := s.queries.CreateTask(ctx, title)
+	row, err := s.queries.CreateTask(ctx, db.CreateTaskParams{Title: title, OwnerID: &u.ID})
 	if err != nil {
 		return Task{}, fmt.Errorf("create task: %w", conflictOr(err))
 	}
 	return fromRow(row), nil
 }
 
-// Get returns the task with id.
-func (s *Service) Get(ctx context.Context, id uuid.UUID) (Task, error) {
-	row, err := s.queries.GetTask(ctx, id)
+// Get returns the task with id, if u may see it.
+func (s *Service) Get(ctx context.Context, u user.User, id uuid.UUID) (Task, error) {
+	row, err := s.queries.GetTask(ctx, db.GetTaskParams{ID: id, OwnerID: ownerFilter(u)})
 	if err != nil {
 		return Task{}, fmt.Errorf("get task %s: %w", id, notFoundOr(err))
 	}
 	return fromRow(row), nil
 }
 
-// List returns up to limit tasks (1 to MaxPageSize), newest first, starting after the cursor, or
-// from the newest when after is nil.
-func (s *Service) List(ctx context.Context, limit int, after *Cursor) (Page, error) {
+// List returns up to limit (1 to MaxPageSize) of the tasks u may see, newest first, starting after
+// the cursor, or from the newest when after is nil.
+func (s *Service) List(ctx context.Context, u user.User, limit int, after *Cursor) (Page, error) {
 	if limit < 1 || limit > MaxPageSize {
 		return Page{}, apperr.Invalid("page size is out of range", apperr.FieldError{
 			Field: "limit", Rule: "range", Message: fmt.Sprintf("must be from 1 to %d", MaxPageSize),
@@ -103,11 +109,18 @@ func (s *Service) List(ctx context.Context, limit int, after *Cursor) (Page, err
 		rows []db.Task
 		err  error
 	)
-	if after == nil {
+	switch {
+	case u.IsAdmin && after == nil:
 		rows, err = s.queries.ListTasks(ctx, fetch)
-	} else {
+	case u.IsAdmin:
 		rows, err = s.queries.ListTasksAfter(ctx, db.ListTasksAfterParams{
 			CreatedAt: after.CreatedAt, ID: after.ID, RowLimit: fetch,
+		})
+	case after == nil:
+		rows, err = s.queries.ListOwnerTasks(ctx, db.ListOwnerTasksParams{OwnerID: &u.ID, Limit: fetch})
+	default:
+		rows, err = s.queries.ListOwnerTasksAfter(ctx, db.ListOwnerTasksAfterParams{
+			OwnerID: &u.ID, CreatedAt: after.CreatedAt, ID: after.ID, RowLimit: fetch,
 		})
 	}
 	if err != nil {
@@ -125,11 +138,12 @@ func (s *Service) List(ctx context.Context, limit int, after *Cursor) (Page, err
 	return page, nil
 }
 
-// Update applies the changes to the task with id. A new title follows the same rules as in Create.
-func (s *Service) Update(ctx context.Context, id uuid.UUID, changes Changes) (Task, error) {
+// Update applies the changes to the task with id, if u may change it. A new title follows the
+// same rules as in Create, among the task's owner's tasks.
+func (s *Service) Update(ctx context.Context, u user.User, id uuid.UUID, changes Changes) (Task, error) {
 	if changes.Title == nil && changes.Done == nil {
 		// Nothing to change: don't touch updated_at.
-		return s.Get(ctx, id)
+		return s.Get(ctx, u, id)
 	}
 	if changes.Title != nil {
 		title, err := cleanTitle(*changes.Title)
@@ -139,17 +153,19 @@ func (s *Service) Update(ctx context.Context, id uuid.UUID, changes Changes) (Ta
 		changes.Title = &title
 	}
 
-	row, err := s.queries.UpdateTask(ctx, db.UpdateTaskParams{ID: id, Title: changes.Title, Done: changes.Done})
+	row, err := s.queries.UpdateTask(ctx, db.UpdateTaskParams{
+		ID: id, OwnerID: ownerFilter(u), Title: changes.Title, Done: changes.Done,
+	})
 	if err != nil {
 		return Task{}, fmt.Errorf("update task %s: %w", id, conflictOr(notFoundOr(err)))
 	}
 	return fromRow(row), nil
 }
 
-// Delete hides the task with id: every other method then treats it as not found, and Restore
-// brings it back. Deleting it again is NotFound.
-func (s *Service) Delete(ctx context.Context, id uuid.UUID) error {
-	deleted, err := s.queries.DeleteTask(ctx, id)
+// Delete hides the task with id, if u may change it: every other method then treats it as not
+// found, and Restore brings it back. Deleting it again is NotFound.
+func (s *Service) Delete(ctx context.Context, u user.User, id uuid.UUID) error {
+	deleted, err := s.queries.DeleteTask(ctx, db.DeleteTaskParams{ID: id, OwnerID: ownerFilter(u)})
 	if err != nil {
 		return fmt.Errorf("delete task %s: %w", id, err)
 	}
@@ -159,14 +175,14 @@ func (s *Service) Delete(ctx context.Context, id uuid.UUID) error {
 	return nil
 }
 
-// Restore brings back the deleted task with id, as changed now. A task that isn't deleted is
-// returned unchanged, so a repeated restore is safe. It's a Conflict when a live task has taken the
-// title since.
-func (s *Service) Restore(ctx context.Context, id uuid.UUID) (Task, error) {
-	row, err := s.queries.RestoreTask(ctx, id)
+// Restore brings back the deleted task with id, as changed now, if u may change it. A task that
+// isn't deleted is returned unchanged, so a repeated restore is safe. It's a Conflict when its owner
+// has given a live task the title since.
+func (s *Service) Restore(ctx context.Context, u user.User, id uuid.UUID) (Task, error) {
+	row, err := s.queries.RestoreTask(ctx, db.RestoreTaskParams{ID: id, OwnerID: ownerFilter(u)})
 	if postgres.IsNotFound(err) {
-		// Not deleted: live (an earlier restore), or no such task.
-		return s.Get(ctx, id)
+		// Not deleted (live: an earlier restore), not u's, or no such task.
+		return s.Get(ctx, u, id)
 	}
 	if err != nil {
 		return Task{}, fmt.Errorf("restore task %s: %w", id, conflictOr(err))
@@ -206,6 +222,14 @@ func cleanTitle(title string) (string, error) {
 	return title, nil
 }
 
+// ownerFilter is whose tasks u may see and change: nil (everyone's) for an admin, else u's own.
+func ownerFilter(u user.User) *uuid.UUID {
+	if u.IsAdmin {
+		return nil
+	}
+	return &u.ID
+}
+
 func notFoundOr(err error) error {
 	if postgres.IsNotFound(err) {
 		return apperr.NotFound("task not found")
@@ -225,6 +249,7 @@ func fromRow(row db.Task) Task {
 		ID:        row.ID,
 		Title:     row.Title,
 		Done:      row.Done,
+		OwnerID:   row.OwnerID,
 		CreatedAt: row.CreatedAt,
 		UpdatedAt: row.UpdatedAt,
 	}

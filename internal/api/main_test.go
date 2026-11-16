@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog"
 
@@ -46,6 +47,36 @@ func testAPI(t *testing.T) (http.Handler, *pgxpool.Pool) {
 
 // testSubject is who testAPI's requests are signed in as.
 const testSubject = "test-user"
+
+// testUserID returns the ID of testSubject's user, recording them first if needed, without
+// changing whether they're an admin.
+func testUserID(t *testing.T, pool *pgxpool.Pool) uuid.UUID {
+	t.Helper()
+	var id uuid.UUID
+	err := pool.QueryRow(t.Context(),
+		`INSERT INTO users (auth_subject) VALUES ($1)
+		 ON CONFLICT (auth_subject) DO UPDATE SET auth_subject = EXCLUDED.auth_subject
+		 RETURNING id`, testSubject).Scan(&id)
+	if err != nil {
+		t.Fatalf("seed test user: %v", err)
+	}
+	return id
+}
+
+// testUser records testSubject as a user straight in the database, an admin or not, and returns
+// their ID: the same user their requests then act as.
+func testUser(t *testing.T, pool *pgxpool.Pool, admin bool) uuid.UUID {
+	t.Helper()
+	var id uuid.UUID
+	err := pool.QueryRow(t.Context(),
+		`INSERT INTO users (auth_subject, is_admin) VALUES ($1, $2)
+		 ON CONFLICT (auth_subject) DO UPDATE SET is_admin = EXCLUDED.is_admin
+		 RETURNING id`, testSubject, admin).Scan(&id)
+	if err != nil {
+		t.Fatalf("seed test user: %v", err)
+	}
+	return id
+}
 
 // testAuthenticator returns the real token check (internal/auth/jwks), trusting a test issuer of
 // the test's own.

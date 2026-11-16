@@ -21,7 +21,8 @@ import (
 // uses only the shared helpers in main_test.go: it outlives any one feature's tests.
 func TestPurgeDeletedRowsQueuesAJob(t *testing.T) {
 	t.Parallel()
-	router, _ := testAPI(t)
+	router, pool := testAPI(t)
+	testUser(t, pool, true)
 
 	rec := send(t, router, http.MethodPost, "/deleted-row-purges", `{"older_than_days":45}`)
 
@@ -64,7 +65,8 @@ func TestPurgeDeletedRowsRejects(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			router, _ := testAPI(t)
+			router, pool := testAPI(t)
+			testUser(t, pool, true)
 
 			rec := send(t, router, http.MethodPost, "/deleted-row-purges", tt.body)
 
@@ -83,12 +85,29 @@ func TestPurgeDeletedRowsQueueDownIs500(t *testing.T) {
 	down := redis.NewClient(&redis.Options{Addr: "localhost:1", MaxRetries: -1})
 	t.Cleanup(func() { _ = down.Close() })
 	authn, issuer := testAuthenticator(t)
-	router := signedIn(NewRouter(zerolog.Nop(), NewServices(db.New(testdb.New(t)), valkey.NewEnqueuer(down)), authn),
+	pool := testdb.New(t)
+	testUser(t, pool, true)
+	router := signedIn(NewRouter(zerolog.Nop(), NewServices(db.New(pool), valkey.NewEnqueuer(down)), authn),
 		issuer.Token(testSubject))
 
 	rec := send(t, router, http.MethodPost, "/deleted-row-purges", `{"older_than_days":30}`)
 
 	want := problemReply{Status: http.StatusInternalServerError, Detail: internalErrorDetail}
+	if diff := cmp.Diff(want, readProblem(t, rec)); diff != "" {
+		t.Errorf("POST /deleted-row-purges reply mismatch (-want +got):\n%s", diff)
+	}
+}
+
+// Purging removes every user's deleted rows for good, so only an admin may; anyone else is told
+// so (403: the endpoint is no secret).
+func TestPurgeDeletedRowsIsForAdmins(t *testing.T) {
+	t.Parallel()
+	router, pool := testAPI(t)
+	testUser(t, pool, false)
+
+	rec := send(t, router, http.MethodPost, "/deleted-row-purges", `{"older_than_days":30}`)
+
+	want := problemReply{Status: http.StatusForbidden, Detail: "only admins may purge deleted rows"}
 	if diff := cmp.Diff(want, readProblem(t, rec)); diff != "" {
 		t.Errorf("POST /deleted-row-purges reply mismatch (-want +got):\n%s", diff)
 	}

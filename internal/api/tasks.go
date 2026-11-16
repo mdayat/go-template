@@ -42,11 +42,13 @@ type updateTaskRequest struct {
 }
 
 type taskResponse struct {
-	ID        uuid.UUID `json:"id"`
-	Title     string    `json:"title"`
-	Done      bool      `json:"done"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID    uuid.UUID `json:"id"`
+	Title string    `json:"title"`
+	Done  bool      `json:"done"`
+	// null for a task from before tasks had owners (only admins see those).
+	OwnerID   *uuid.UUID `json:"owner_id"`
+	CreatedAt time.Time  `json:"created_at"`
+	UpdatedAt time.Time  `json:"updated_at"`
 }
 
 type taskListResponse struct {
@@ -60,7 +62,7 @@ func (tr taskRoutes) create(w http.ResponseWriter, r *http.Request) error {
 	if err := tr.decoder.decode(w, r, &req); err != nil {
 		return err
 	}
-	t, err := tr.tasks.Create(r.Context(), req.Title)
+	t, err := tr.tasks.Create(r.Context(), currentUser(r), req.Title)
 	if err != nil {
 		return err
 	}
@@ -88,7 +90,7 @@ func (tr taskRoutes) list(w http.ResponseWriter, r *http.Request) error {
 		after = &cursor
 	}
 
-	page, err := tr.tasks.List(r.Context(), limit, after)
+	page, err := tr.tasks.List(r.Context(), currentUser(r), limit, after)
 	if err != nil {
 		return err
 	}
@@ -108,7 +110,7 @@ func (tr taskRoutes) get(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	t, err := tr.tasks.Get(r.Context(), id)
+	t, err := tr.tasks.Get(r.Context(), currentUser(r), id)
 	if err != nil {
 		return err
 	}
@@ -125,7 +127,7 @@ func (tr taskRoutes) update(w http.ResponseWriter, r *http.Request) error {
 	if err := tr.decoder.decode(w, r, &req); err != nil {
 		return err
 	}
-	t, err := tr.tasks.Update(r.Context(), id, task.Changes{Title: req.Title, Done: req.Done})
+	t, err := tr.tasks.Update(r.Context(), currentUser(r), id, task.Changes{Title: req.Title, Done: req.Done})
 	if err != nil {
 		return err
 	}
@@ -138,7 +140,7 @@ func (tr taskRoutes) delete(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	if err := tr.tasks.Delete(r.Context(), id); err != nil {
+	if err := tr.tasks.Delete(r.Context(), currentUser(r), id); err != nil {
 		return err
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -152,7 +154,7 @@ func (tr taskRoutes) restore(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	t, err := tr.tasks.Restore(r.Context(), id)
+	t, err := tr.tasks.Restore(r.Context(), currentUser(r), id)
 	if err != nil {
 		return err
 	}
@@ -172,9 +174,10 @@ func taskID(r *http.Request) (uuid.UUID, error) {
 
 func toTaskResponse(t task.Task) taskResponse {
 	return taskResponse{
-		ID:    t.ID,
-		Title: t.Title,
-		Done:  t.Done,
+		ID:      t.ID,
+		Title:   t.Title,
+		Done:    t.Done,
+		OwnerID: t.OwnerID,
 		// pgx returns times in this process's local time zone; replies always use UTC.
 		CreatedAt: t.CreatedAt.UTC(),
 		UpdatedAt: t.UpdatedAt.UTC(),

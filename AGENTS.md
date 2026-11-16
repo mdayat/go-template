@@ -86,6 +86,9 @@ refuses them outside `internal/queue/valkey`, `internal/startup` and `internal/t
   our user (`internal/user`, the `users` table; `is_admin` is ours). Handlers never read tokens or a
   provider's claims; tables point at `users.id`. A provider is an `Authenticator` implementation
   picked in `cmd/api`. Endpoint tests are signed in by `testAPI`.
+- Handlers pass `currentUser(r)` to services, which decide who may do what: a user's own rows
+  only (someone else's is `NotFound`, never `Forbidden`), an admin's everyone's. `Forbidden` (403)
+  is for actions that are no secret, like an admin-only endpoint.
 
 <!-- remove:end -->
 **Logging** ([logging.md](docs/standards/logging.md))

@@ -5,6 +5,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/mdayat/go-template/internal/apperr"
 	"github.com/mdayat/go-template/internal/jobs"
 	"github.com/mdayat/go-template/internal/queue"
 	"github.com/mdayat/go-template/internal/softdelete"
@@ -25,10 +26,14 @@ type purgeRequest struct {
 	OlderThanDays *int `json:"older_than_days" validate:"required"`
 }
 
-// purge queues a job that removes for good, from every soft-deleted table, the rows deleted more
-// than older_than_days ago. It only queues: an endpoint that also wrote rows could save them and
-// then fail to queue the job.
+// purge, for admins, queues a job that removes for good, from every soft-deleted table, the rows
+// deleted more than older_than_days ago. It only queues: an endpoint that also wrote rows could
+// save them and then fail to queue the job.
 func (pr purgeRoutes) purge(w http.ResponseWriter, r *http.Request) error {
+	// It removes every user's deleted rows for good: not one user's call to make.
+	if !currentUser(r).IsAdmin {
+		return apperr.Forbidden("only admins may purge deleted rows")
+	}
 	var req purgeRequest
 	if err := pr.decoder.decode(w, r, &req); err != nil {
 		return err

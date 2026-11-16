@@ -14,15 +14,22 @@ import (
 
 const createTask = `-- name: CreateTask :one
 
-INSERT INTO tasks (title)
-VALUES ($1)
-RETURNING id, title, done, created_at, updated_at, deleted_at
+INSERT INTO tasks (title, owner_id)
+VALUES ($1, $2)
+RETURNING id, title, done, created_at, updated_at, deleted_at, owner_id
 `
+
+type CreateTaskParams struct {
+	Title   string
+	OwnerID *uuid.UUID
+}
 
 // Every query on tasks skips deleted rows (deleted_at IS NULL), or its name ends in
 // IncludingDeleted; make lint (sqlc vet) refuses any other. See docs/standards/database.md.
-func (q *Queries) CreateTask(ctx context.Context, title string) (Task, error) {
-	row := q.db.QueryRow(ctx, createTask, title)
+//
+// owner_id limits a query to one user's tasks; NULL means an admin's: everyone's.
+func (q *Queries) CreateTask(ctx context.Context, arg CreateTaskParams) (Task, error) {
+	row := q.db.QueryRow(ctx, createTask, arg.Title, arg.OwnerID)
 	var i Task
 	err := row.Scan(
 		&i.ID,
@@ -31,6 +38,7 @@ func (q *Queries) CreateTask(ctx context.Context, title string) (Task, error) {
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
+		&i.OwnerID,
 	)
 	return i, err
 }
@@ -40,10 +48,16 @@ UPDATE tasks
 SET deleted_at = now()
 WHERE id = $1
   AND deleted_at IS NULL
+  AND ($2::uuid IS NULL OR owner_id = $2)
 `
 
-func (q *Queries) DeleteTask(ctx context.Context, id uuid.UUID) (int64, error) {
-	result, err := q.db.Exec(ctx, deleteTask, id)
+type DeleteTaskParams struct {
+	ID      uuid.UUID
+	OwnerID *uuid.UUID
+}
+
+func (q *Queries) DeleteTask(ctx context.Context, arg DeleteTaskParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteTask, arg.ID, arg.OwnerID)
 	if err != nil {
 		return 0, err
 	}
@@ -51,14 +65,20 @@ func (q *Queries) DeleteTask(ctx context.Context, id uuid.UUID) (int64, error) {
 }
 
 const getTask = `-- name: GetTask :one
-SELECT id, title, done, created_at, updated_at, deleted_at
+SELECT id, title, done, created_at, updated_at, deleted_at, owner_id
 FROM tasks
 WHERE id = $1
   AND deleted_at IS NULL
+  AND ($2::uuid IS NULL OR owner_id = $2)
 `
 
-func (q *Queries) GetTask(ctx context.Context, id uuid.UUID) (Task, error) {
-	row := q.db.QueryRow(ctx, getTask, id)
+type GetTaskParams struct {
+	ID      uuid.UUID
+	OwnerID *uuid.UUID
+}
+
+func (q *Queries) GetTask(ctx context.Context, arg GetTaskParams) (Task, error) {
+	row := q.db.QueryRow(ctx, getTask, arg.ID, arg.OwnerID)
 	var i Task
 	err := row.Scan(
 		&i.ID,
@@ -67,18 +87,116 @@ func (q *Queries) GetTask(ctx context.Context, id uuid.UUID) (Task, error) {
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
+		&i.OwnerID,
 	)
 	return i, err
 }
 
+const listOwnerTasks = `-- name: ListOwnerTasks :many
+SELECT id, title, done, created_at, updated_at, deleted_at, owner_id
+FROM tasks
+WHERE owner_id = $1
+  AND deleted_at IS NULL
+ORDER BY created_at DESC, id DESC
+LIMIT $2
+`
+
+type ListOwnerTasksParams struct {
+	OwnerID *uuid.UUID
+	Limit   int32
+}
+
+// ListOwnerTasks returns one user's tasks, newest first.
+func (q *Queries) ListOwnerTasks(ctx context.Context, arg ListOwnerTasksParams) ([]Task, error) {
+	rows, err := q.db.Query(ctx, listOwnerTasks, arg.OwnerID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Task
+	for rows.Next() {
+		var i Task
+		if err := rows.Scan(
+			&i.ID,
+			&i.Title,
+			&i.Done,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.DeletedAt,
+			&i.OwnerID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listOwnerTasksAfter = `-- name: ListOwnerTasksAfter :many
+SELECT id, title, done, created_at, updated_at, deleted_at, owner_id
+FROM tasks
+WHERE owner_id = $1
+  AND (created_at, id) < ($2::timestamptz, $3::uuid)
+  AND deleted_at IS NULL
+ORDER BY created_at DESC, id DESC
+LIMIT $4
+`
+
+type ListOwnerTasksAfterParams struct {
+	OwnerID   *uuid.UUID
+	CreatedAt time.Time
+	ID        uuid.UUID
+	RowLimit  int32
+}
+
+// ListOwnerTasksAfter returns the page of one user's tasks after the cursor row (created_at, id).
+func (q *Queries) ListOwnerTasksAfter(ctx context.Context, arg ListOwnerTasksAfterParams) ([]Task, error) {
+	rows, err := q.db.Query(ctx, listOwnerTasksAfter,
+		arg.OwnerID,
+		arg.CreatedAt,
+		arg.ID,
+		arg.RowLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Task
+	for rows.Next() {
+		var i Task
+		if err := rows.Scan(
+			&i.ID,
+			&i.Title,
+			&i.Done,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.DeletedAt,
+			&i.OwnerID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listTasks = `-- name: ListTasks :many
-SELECT id, title, done, created_at, updated_at, deleted_at
+SELECT id, title, done, created_at, updated_at, deleted_at, owner_id
 FROM tasks
 WHERE deleted_at IS NULL
 ORDER BY created_at DESC, id DESC
 LIMIT $1
 `
 
+// ListTasks returns everyone's tasks, newest first, for admins. Not ListOwnerTasks with an
+// optional owner: Postgres may then settle on one plan for both and stop using the owner index,
+// slowing every user's list as the table grows.
 func (q *Queries) ListTasks(ctx context.Context, limit int32) ([]Task, error) {
 	rows, err := q.db.Query(ctx, listTasks, limit)
 	if err != nil {
@@ -95,6 +213,7 @@ func (q *Queries) ListTasks(ctx context.Context, limit int32) ([]Task, error) {
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.DeletedAt,
+			&i.OwnerID,
 		); err != nil {
 			return nil, err
 		}
@@ -107,7 +226,7 @@ func (q *Queries) ListTasks(ctx context.Context, limit int32) ([]Task, error) {
 }
 
 const listTasksAfter = `-- name: ListTasksAfter :many
-SELECT id, title, done, created_at, updated_at, deleted_at
+SELECT id, title, done, created_at, updated_at, deleted_at, owner_id
 FROM tasks
 WHERE (created_at, id) < ($1::timestamptz, $2::uuid)
   AND deleted_at IS NULL
@@ -121,7 +240,7 @@ type ListTasksAfterParams struct {
 	RowLimit  int32
 }
 
-// ListTasksAfter returns the page after the cursor row (created_at, id), newest first.
+// ListTasksAfter returns the page of everyone's tasks after the cursor row (created_at, id).
 func (q *Queries) ListTasksAfter(ctx context.Context, arg ListTasksAfterParams) ([]Task, error) {
 	rows, err := q.db.Query(ctx, listTasksAfter, arg.CreatedAt, arg.ID, arg.RowLimit)
 	if err != nil {
@@ -138,6 +257,7 @@ func (q *Queries) ListTasksAfter(ctx context.Context, arg ListTasksAfterParams) 
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.DeletedAt,
+			&i.OwnerID,
 		); err != nil {
 			return nil, err
 		}
@@ -154,7 +274,7 @@ DELETE FROM tasks
 WHERE deleted_at < now() - $1::bigint * interval '1 day'
 `
 
-// Removes for good the tasks deleted more than older_than_days ago.
+// Removes for good the tasks deleted more than older_than_days ago, whoever owns them.
 func (q *Queries) PurgeDeletedTasks(ctx context.Context, olderThanDays int64) (int64, error) {
 	result, err := q.db.Exec(ctx, purgeDeletedTasks, olderThanDays)
 	if err != nil {
@@ -169,12 +289,18 @@ SET deleted_at = NULL,
     updated_at = now()
 WHERE id = $1
   AND deleted_at IS NOT NULL
-RETURNING id, title, done, created_at, updated_at, deleted_at
+  AND ($2::uuid IS NULL OR owner_id = $2)
+RETURNING id, title, done, created_at, updated_at, deleted_at, owner_id
 `
 
+type RestoreTaskParams struct {
+	ID      uuid.UUID
+	OwnerID *uuid.UUID
+}
+
 // RestoreTask brings back a deleted task. A restore is a change, so it sets updated_at.
-func (q *Queries) RestoreTask(ctx context.Context, id uuid.UUID) (Task, error) {
-	row := q.db.QueryRow(ctx, restoreTask, id)
+func (q *Queries) RestoreTask(ctx context.Context, arg RestoreTaskParams) (Task, error) {
+	row := q.db.QueryRow(ctx, restoreTask, arg.ID, arg.OwnerID)
 	var i Task
 	err := row.Scan(
 		&i.ID,
@@ -183,6 +309,7 @@ func (q *Queries) RestoreTask(ctx context.Context, id uuid.UUID) (Task, error) {
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
+		&i.OwnerID,
 	)
 	return i, err
 }
@@ -194,18 +321,25 @@ SET title = COALESCE($1, title),
     updated_at = now()
 WHERE id = $3
   AND deleted_at IS NULL
-RETURNING id, title, done, created_at, updated_at, deleted_at
+  AND ($4::uuid IS NULL OR owner_id = $4)
+RETURNING id, title, done, created_at, updated_at, deleted_at, owner_id
 `
 
 type UpdateTaskParams struct {
-	Title *string
-	Done  *bool
-	ID    uuid.UUID
+	Title   *string
+	Done    *bool
+	ID      uuid.UUID
+	OwnerID *uuid.UUID
 }
 
-// A NULL argument leaves that column as it is.
+// A NULL title or done leaves that column as it is.
 func (q *Queries) UpdateTask(ctx context.Context, arg UpdateTaskParams) (Task, error) {
-	row := q.db.QueryRow(ctx, updateTask, arg.Title, arg.Done, arg.ID)
+	row := q.db.QueryRow(ctx, updateTask,
+		arg.Title,
+		arg.Done,
+		arg.ID,
+		arg.OwnerID,
+	)
 	var i Task
 	err := row.Scan(
 		&i.ID,
@@ -214,6 +348,7 @@ func (q *Queries) UpdateTask(ctx context.Context, arg UpdateTaskParams) (Task, e
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
+		&i.OwnerID,
 	)
 	return i, err
 }

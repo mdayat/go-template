@@ -21,13 +21,17 @@ Two rules hold everything up:
 |---|---|
 | `apperr.BadRequest(detail)` | the input can't be read (bad JSON, a bad cursor) |
 | `apperr.Invalid(detail, fields...)` | readable, but breaks a rule; `fields` say which |
-| `apperr.NotFound(detail)` | the thing doesn't exist |
+| `apperr.NotFound(detail)` | the thing doesn't exist, or isn't the caller's to see |
 | `apperr.Conflict(detail)` | clashes with current state (a duplicate) |
 
 <!-- remove:api -->
-The HTTP API replies 400, 422, 404 and 409 for them. It has one more kind,
-`apperr.Unauthenticated(detail)`: no one is signed in, or their token was refused (401). Its detail
-never says why a token was refused; wrap the cause, so it reaches the log line only.
+The HTTP API replies 400, 422, 404 and 409 for them, and has two kinds of its own:
+
+- `apperr.Unauthenticated(detail)`: no one is signed in, or their token was refused (401). Its
+  detail never says why a token was refused; wrap the cause, so it reaches the log line only.
+- `apperr.Forbidden(detail)`: signed in, but not allowed (403), for an action whose existence is no
+  secret (an admin-only endpoint). Someone else's row is `NotFound` instead: a 403 would confirm
+  it exists.
 
 <!-- remove:end -->
 - `detail` and each field's message are **shown to the caller**, so they never hold internal
