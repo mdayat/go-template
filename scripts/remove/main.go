@@ -5,7 +5,8 @@
 // A part is its folders, plus the blocks of shared files marked for it: a line "remove:<part>"
 // and a line "remove:end", each a whole-line comment in the file's own syntax (//, # or <!-- -->).
 // Markers for the other part stay. Blocks marked "template" are only for the template itself (CI
-// checking every shape) and go with any part; "markers" takes this tool out too.
+// checking every shape) and go with any part; "markers" takes this tool out too. Blocks marked
+// "valkey" are what both parts use (see shared) and go with whichever part is removed last.
 //
 // Only files git sees are changed (tracked, or new and not ignored), so a local .env is left as it
 // is, and git can undo everything: commit first.
@@ -20,6 +21,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -28,15 +30,15 @@ func parts() map[string][]string {
 	return map[string][]string{
 		"api": {
 			"cmd/api", "internal/api", "docs/standards/http-api.md",
-			// Signing in exists for the API's routes; nothing else checks tokens.
-			"internal/auth", "internal/authtest", "scripts/devtoken",
+			// Signing in and rate limits exist for the API's routes; nothing else checks tokens or
+			// counts requests.
+			"internal/auth", "internal/authtest", "scripts/devtoken", "internal/ratelimit",
 		},
 		// Without a worker nothing runs queued jobs, so the queue goes too: an endpoint would queue
 		// jobs that never run.
 		"worker": {
 			"cmd/worker", "internal/worker", "internal/jobs", "internal/queue", "internal/testqueue",
-			"internal/startup/redis.go", "internal/startup/redis_test.go", "docs/standards/worker.md",
-			"internal/api/purge.go", "internal/api/purge_test.go",
+			"docs/standards/worker.md", "internal/api/purge.go", "internal/api/purge_test.go",
 		},
 		// A project keeping both parts needs neither the markers nor this tool.
 		"markers": {"scripts/remove"},
@@ -51,13 +53,32 @@ func mentions() map[string][]string {
 		"api": {
 			"cmd/api", "internal/api", "http-api.md", "HTTP_ADDR", "testAPI", "/healthz",
 			"internal/auth", "devtoken", "dev-token", "AUTH_JWKS_URL", "AUTH_ISSUER", "AUTH_AUDIENCE",
+			"TRUSTED_PROXIES", "RATE_LIMIT_PER_IP", "RATE_LIMIT_PER_USER", "internal/ratelimit", "redis_rate",
 		},
 		"worker": {
 			"cmd/worker", "internal/worker", "internal/jobs", "internal/queue", "testqueue", "worker.md",
-			"testWorker", "run-worker", "REDIS_URL", "PURGE_WEBHOOK_URL", "deleted-row-purges",
-			"Valkey", "valkey", "VALKEY", "Redis", "redis", "asynq",
+			"testWorker", "run-worker", "PURGE_WEBHOOK_URL", "deleted-row-purges", "asynq",
 		},
 	}
+}
+
+// shared is the part both api and worker use: Valkey, the worker's job queue and the API's request
+// counts. Its blocks, paths and mentions go only with the last of the two, when the other's entry
+// point (in lasts) is already gone. Not a part make remove takes on its own.
+const shared = "valkey"
+
+// lasts maps each part to the entry point of the other: once that's gone, removing this part
+// removes the shared one too.
+func lasts() map[string]string {
+	return map[string]string{"api": "cmd/worker", "worker": "cmd/api"}
+}
+
+func sharedPaths() []string {
+	return []string{"internal/startup/redis.go", "internal/startup/redis_test.go", "internal/testredis"}
+}
+
+func sharedMentions() []string {
+	return []string{"Valkey", "valkey", "VALKEY", "Redis", "redis", "REDIS_URL", "testredis"}
 }
 
 // templateOnly marks blocks that only the template needs; any run removes them.
@@ -89,12 +110,21 @@ func run(what string) error {
 	if _, err := os.Stat("go.mod"); err != nil {
 		return errors.New("run it from the repository root (where go.mod is)")
 	}
+	words := mentions()[what]
+	withShared := false
+	if other, ok := lasts()[what]; ok {
+		if _, err := os.Stat(other); errors.Is(err, fs.ErrNotExist) {
+			withShared = true
+			paths = append(slices.Clone(paths), sharedPaths()...)
+			words = append(slices.Clone(words), sharedMentions()...)
+		}
+	}
 	files, err := gitFiles()
 	if err != nil {
 		return err
 	}
 
-	changed, err := stripFiles(".", files, what, paths)
+	changed, err := stripFiles(".", files, what, withShared, paths)
 	if err != nil {
 		return err
 	}
@@ -135,7 +165,7 @@ func run(what string) error {
 	if err != nil {
 		return err
 	}
-	found, err := findMentions(".", files, mentions()[what], paths, parts()["markers"])
+	found, err := findMentions(".", files, words, paths, parts()["markers"])
 	if err != nil {
 		return err
 	}
@@ -204,11 +234,12 @@ func gitFiles() ([]string, error) {
 	return strings.Split(strings.TrimRight(string(out), "\x00"), "\x00"), nil
 }
 
-// stripFiles strips what's blocks (or every marker, for "markers") from files under dir, skipping
+// stripFiles strips what's blocks (with the shared part's if withShared, or every marker, for
+// "markers") from files under dir, skipping
 // those under skip (about to be deleted), and returns how many it changed. It checks every file
 // before writing any and reports every broken one, so a broken marker leaves the project untouched.
 // Files are reached through an os.Root, so a symlink can't lead it outside dir.
-func stripFiles(dir string, files []string, what string, skip []string) (int, error) {
+func stripFiles(dir string, files []string, what string, withShared bool, skip []string) (int, error) {
 	root, err := os.OpenRoot(dir)
 	if err != nil {
 		return 0, err
@@ -238,7 +269,7 @@ func stripFiles(dir string, files []string, what string, skip []string) (int, er
 		if bytes.IndexByte(content, 0) >= 0 { // a binary file
 			continue
 		}
-		stripped, err := strip(content, what)
+		stripped, err := strip(content, what, withShared)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", path, err))
 			continue
@@ -278,17 +309,19 @@ func under(path string, paths []string) bool {
 	return false
 }
 
-// strip returns content without what's marked blocks and the template-only ones, keeping every
-// other block with its markers. For "markers" it keeps the other blocks' lines and drops only their
+// strip returns content without what's marked blocks and the template-only ones (and the shared
+// part's, if withShared), keeping every other block with its markers. For "markers" it keeps the other blocks' lines and drops only their
 // marker lines. A marker inside another block, an end without a start, a start without an end, or
 // an unknown part is an error.
 //
 // A dropped block or marker line takes one of the blank lines around it with it, so it leaves no
 // double blank line, and none at the start or end of the file.
-func strip(content []byte, what string) ([]byte, error) {
+func strip(content []byte, what string, withShared bool) ([]byte, error) {
 	lines := strings.SplitAfter(string(content), "\n")
 	known := parts()
-	drop := func(part string) bool { return part == what || part == templateOnly }
+	drop := func(part string) bool {
+		return part == what || part == templateOnly || (withShared && part == shared)
+	}
 	keepMarkers := what != "markers"
 
 	var out []string
@@ -325,7 +358,7 @@ func strip(content []byte, what string) ([]byte, error) {
 			open = ""
 		case open != "":
 			return nil, fmt.Errorf("line %d: remove:%s inside the remove:%s block from line %d", i+1, part, open, openedAt)
-		case known[part] == nil && part != templateOnly:
+		case known[part] == nil && part != templateOnly && part != shared:
 			return nil, fmt.Errorf("line %d: unknown part remove:%s", i+1, part)
 		default:
 			if drop(part) || !keepMarkers {

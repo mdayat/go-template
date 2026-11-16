@@ -55,13 +55,40 @@ func TestStrip(t *testing.T) {
 		{"markers", lines("keep 1", "api in Go", "\tworker in YAML", "api in Markdown", "keep 2")},
 	}
 	for _, tt := range tests {
-		got, err := strip([]byte(file), tt.what)
+		got, err := strip([]byte(file), tt.what, false)
 		if err != nil {
 			t.Errorf("strip(%s) error = %v", tt.what, err)
 			continue
 		}
 		if diff := cmp.Diff(tt.want, string(got)); diff != "" {
 			t.Errorf("strip(%s) mismatch (-want +got):\n%s", tt.what, diff)
+		}
+	}
+}
+
+// The shared part's blocks stay while the other part is still there, and go with the last one.
+func TestStripShared(t *testing.T) {
+	t.Parallel()
+	file := lines("keep", "# remove:valkey", "both use it", "# remove:end", "# remove:api", "api", "# remove:end")
+
+	tests := []struct {
+		what       string
+		withShared bool
+		want       string
+	}{
+		{"api", false, lines("keep", "# remove:valkey", "both use it", "# remove:end")},
+		{"api", true, lines("keep")},
+		{"worker", true, lines("keep", "# remove:api", "api", "# remove:end")},
+		{"markers", false, lines("keep", "both use it", "api")},
+	}
+	for _, tt := range tests {
+		got, err := strip([]byte(file), tt.what, tt.withShared)
+		if err != nil {
+			t.Errorf("strip(%s, %v) error = %v", tt.what, tt.withShared, err)
+			continue
+		}
+		if diff := cmp.Diff(tt.want, string(got)); diff != "" {
+			t.Errorf("strip(%s, %v) mismatch (-want +got):\n%s", tt.what, tt.withShared, diff)
 		}
 	}
 }
@@ -75,7 +102,7 @@ func TestStripLeavesMentionsAlone(t *testing.T) {
 		"x := 1 // remove:api",
 	)
 
-	got, err := strip([]byte(file), "api")
+	got, err := strip([]byte(file), "api", false)
 
 	if err != nil || string(got) != file {
 		t.Errorf("strip() = %q, %v; want the file unchanged", got, err)
@@ -98,7 +125,7 @@ func TestStripRefusesBrokenMarkers(t *testing.T) {
 	}
 	for _, tt := range tests {
 		for _, what := range []string{"api", "worker", "markers"} {
-			if got, err := strip([]byte(tt.file), what); err == nil {
+			if got, err := strip([]byte(tt.file), what, false); err == nil {
 				t.Errorf("%s: strip(%s) = %q, want an error", tt.name, what, got)
 			}
 		}
@@ -142,7 +169,7 @@ func TestStripFilesChangesNothingOnABrokenMarker(t *testing.T) {
 		"c/broken2.go": lines("x", "// remove:end"),
 	})
 
-	_, err := stripFiles(root, names, "api", nil)
+	_, err := stripFiles(root, names, "api", false, nil)
 
 	if err == nil || !strings.Contains(err.Error(), "broken.go") || !strings.Contains(err.Error(), "broken2.go") {
 		t.Errorf("stripFiles() error = %v, want one naming broken.go and broken2.go", err)
@@ -164,7 +191,7 @@ func TestStripFilesSkips(t *testing.T) {
 		"cmd/api/main.go": lines("// remove:api", "broken, but about to be deleted"),
 	})
 
-	changed, err := stripFiles(root, append(names, "deleted.go"), "api", []string{"cmd/api"})
+	changed, err := stripFiles(root, append(names, "deleted.go"), "api", false, []string{"cmd/api"})
 	if err != nil || changed != 1 {
 		t.Fatalf("stripFiles() = %d, %v; want 1 file changed", changed, err)
 	}
@@ -232,7 +259,7 @@ func TestStripLeavesNoDoubleBlankLines(t *testing.T) {
 		{"Windows line endings", "api", "a\r\n\r\n# remove:api\r\nx\r\n# remove:end\r\n\r\nb\r\n", "a\r\n\r\nb\r\n"},
 	}
 	for _, tt := range tests {
-		got, err := strip([]byte(tt.file), tt.what)
+		got, err := strip([]byte(tt.file), tt.what, false)
 		if err != nil {
 			t.Errorf("%s: strip(%s) error = %v", tt.name, tt.what, err)
 			continue

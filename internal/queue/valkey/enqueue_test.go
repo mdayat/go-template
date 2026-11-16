@@ -8,6 +8,7 @@ import (
 
 	"github.com/mdayat/go-template/internal/queue"
 	"github.com/mdayat/go-template/internal/testqueue"
+	"github.com/mdayat/go-template/internal/testredis"
 )
 
 // queuedJob is the part of a queued asynq task that our Job decides.
@@ -33,7 +34,7 @@ func TestEnqueueKeepsTheJobsOptions(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			client := testqueue.New(t)
+			client := testredis.New(t)
 			queueName := testqueue.NewQueue(t, client)
 			job := queue.Job{
 				Type: "test:job", Queue: queueName, Payload: []byte(`{"n":1}`), Timeout: 90 * time.Second, MaxRetries: tt.maxRetries,
@@ -60,7 +61,7 @@ func TestEnqueueKeepsTheJobsOptions(t *testing.T) {
 // is queued.
 func TestEnqueueRefusesBadJobs(t *testing.T) {
 	t.Parallel()
-	client := testqueue.New(t)
+	client := testredis.New(t)
 	queueName := testqueue.NewQueue(t, client)
 	enqueuer := NewEnqueuer(client)
 	valid := queue.Job{Type: "test:job", Queue: queueName, Timeout: time.Minute, MaxRetries: 1}

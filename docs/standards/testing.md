@@ -45,14 +45,21 @@ creates the rows it needs.
 - `TEST_DATABASE_URL` must point at a local Postgres (`.example.env`); anything else is refused.
   If it's unset, tests fail rather than skip: a skipped test looks like a passing one.
 
+<!-- remove:valkey -->
+## Valkey in tests
+
+Tests that use Valkey use a real one: `testredis.New(t)` (`internal/testredis`) connects to
+`TEST_REDIS_URL`, which must be a local Valkey and a database other than 0, the one the app uses,
+so tests never touch the app's data. Tests share that database, so each keeps to keys of its own
+and deletes them. Like `TEST_DATABASE_URL`, an unset or refused `TEST_REDIS_URL` fails the tests.
+
+<!-- remove:end -->
 <!-- remove:worker -->
 ## The job queue in tests
 
-Tests that queue jobs use a real Valkey, through `internal/testqueue`: `testqueue.New(t)` connects
-to `TEST_REDIS_URL`, which must be a local Valkey and a database other than 0, the one the app
-uses, so a worker running on your machine never picks up a test's job. Tests share that database,
-so each one finds its own job by ID and deletes it: `testqueue.Take(t, client, jobs.Queue, id)`.
-Like `TEST_DATABASE_URL`, an unset or refused `TEST_REDIS_URL` fails the tests. Job handlers
+A test that queues a job finds it by ID and deletes it: `testqueue.Take(t, testredis.New(t),
+jobs.Queue, id)`; one that runs a job server takes a queue of its own, `testqueue.NewQueue`. A
+worker running on your machine never picks up a test's job: it uses database 0. Job handlers
 themselves don't need Valkey; see [worker.md](worker.md#tests).
 
 <!-- remove:end -->

@@ -4,8 +4,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
 	"github.com/rs/zerolog"
 
+	"github.com/mdayat/go-template/internal/api"
 	"github.com/mdayat/go-template/internal/auth/jwks"
 	"github.com/mdayat/go-template/internal/config"
 )
@@ -18,9 +20,7 @@ func TestLoadSettings(t *testing.T) {
 		"AUTH_JWKS_URL": "https://keys.example.com/jwks.json",
 		"AUTH_ISSUER":   "https://issuer.example.com",
 		"AUTH_AUDIENCE": "app",
-		// remove:worker
-		"REDIS_URL": "redis://localhost:6379/0",
-		// remove:end
+		"REDIS_URL":     "redis://localhost:6379/0",
 	})
 	if err != nil {
 		t.Fatalf("loadSettings() error = %v", err)
@@ -33,26 +33,30 @@ func TestLoadSettings(t *testing.T) {
 		auth: jwks.Config{
 			KeysURL: "https://keys.example.com/jwks.json", Issuer: "https://issuer.example.com", Audience: "app",
 		},
-		// remove:worker
+		limits:   api.Limits{PerIP: 600, PerUser: 120},
 		redisURL: "redis://localhost:6379/0",
-		// remove:end
 	}
-	if got != want {
-		t.Errorf("loadSettings() = %+v, want %+v", got, want)
+	if diff := cmp.Diff(want, got, cmp.AllowUnexported(settings{})); diff != "" {
+		t.Errorf("loadSettings() mismatch (-want +got):\n%s", diff)
 	}
 
 	got, err = loadSettings(config.Map{
-		"HTTP_ADDR":     ":9090",
-		"DATABASE_URL":  "x",
-		"AUTH_JWKS_URL": "https://keys.example.com/jwks.json",
-		"AUTH_ISSUER":   "i",
-		"AUTH_AUDIENCE": "a",
-		// remove:worker
-		"REDIS_URL": "y",
-		// remove:end
+		"HTTP_ADDR":           ":9090",
+		"DATABASE_URL":        "x",
+		"AUTH_JWKS_URL":       "https://keys.example.com/jwks.json",
+		"AUTH_ISSUER":         "i",
+		"AUTH_AUDIENCE":       "a",
+		"REDIS_URL":           "y",
+		"TRUSTED_PROXIES":     "10.0.0.0/8,2001:db8::/32",
+		"RATE_LIMIT_PER_IP":   "0",
+		"RATE_LIMIT_PER_USER": "30",
 	})
 	if err != nil || got.httpAddr != ":9090" {
 		t.Errorf("loadSettings() httpAddr = %q, error = %v; want :9090, nil", got.httpAddr, err)
+	}
+	wantLimits := api.Limits{TrustedProxies: []string{"10.0.0.0/8", "2001:db8::/32"}, PerIP: 0, PerUser: 30}
+	if diff := cmp.Diff(wantLimits, got.limits); diff != "" {
+		t.Errorf("loadSettings() limits mismatch (-want +got):\n%s", diff)
 	}
 }
 
@@ -63,10 +67,7 @@ func TestLoadSettingsNamesEveryMissingSetting(t *testing.T) {
 		t.Fatal("loadSettings() error = nil, want one naming every required setting")
 	}
 	required := []string{
-		"DATABASE_URL", "AUTH_JWKS_URL", "AUTH_ISSUER", "AUTH_AUDIENCE",
-		// remove:worker
-		"REDIS_URL",
-		// remove:end
+		"DATABASE_URL", "AUTH_JWKS_URL", "AUTH_ISSUER", "AUTH_AUDIENCE", "REDIS_URL",
 	}
 	for _, name := range required {
 		if !strings.Contains(err.Error(), name) {
@@ -100,15 +101,40 @@ func TestLoadSettingsChecksTheKeysURL(t *testing.T) {
 			"AUTH_JWKS_URL": tt.keysURL,
 			"AUTH_ISSUER":   "i",
 			"AUTH_AUDIENCE": "a",
-			// remove:worker
-			"REDIS_URL": "y",
-			// remove:end
+			"REDIS_URL":     "y",
 		})
 		if (err == nil) != tt.ok {
 			t.Errorf("APP_ENV=%s AUTH_JWKS_URL=%s: loadSettings() error = %v, want ok = %v", tt.env, tt.keysURL, err, tt.ok)
 		}
 		if err != nil && strings.Contains(err.Error(), tt.keysURL) {
 			t.Errorf("loadSettings() error = %q, want it without the value", err)
+		}
+	}
+}
+
+func TestLoadSettingsChecksTrustedProxies(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		value string
+		ok    bool
+	}{
+		{"10.0.0.0/8,2001:db8::/32", true},
+		{"0.0.0.0/0", false},
+		{"10.0.0.0/8,::/0", false},
+		{"::ffff:10.0.0.0/104", false},
+	}
+	for _, tt := range tests {
+		_, err := loadSettings(config.Map{
+			"DATABASE_URL":    "x",
+			"AUTH_JWKS_URL":   "https://keys.example.com/jwks.json",
+			"AUTH_ISSUER":     "i",
+			"AUTH_AUDIENCE":   "a",
+			"REDIS_URL":       "y",
+			"TRUSTED_PROXIES": tt.value,
+		})
+		if (err == nil) != tt.ok {
+			t.Errorf("TRUSTED_PROXIES=%s: loadSettings() error = %v, want ok = %v", tt.value, err, tt.ok)
 		}
 	}
 }

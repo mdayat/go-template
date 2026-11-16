@@ -113,6 +113,55 @@ decides: the rules live in one place, the same for every entry point. In the tas
 - An action that's no secret but not for everyone (an admin-only endpoint) is a 403,
   `apperr.Forbidden`.
 
+## Rate limits
+
+Every route but `/healthz` has two limits (`internal/api/ratelimit.go`):
+
+- **Per client IP, signed out** (`RATE_LIMIT_PER_IP`, default 600 a minute): requests without a
+  valid sign-in (no token, or a refused one), so a flood of bad tokens is cut off with a 429 instead
+  of 401s. Signed-in requests aren't counted per IP: many users can share one (a mobile carrier's,
+  an office's). An IPv6 client is counted by its /64, which it usually holds whole.
+- **Per signed-in user** (`RATE_LIMIT_PER_USER`, default 120 a minute), wherever they send from.
+
+0 turns a limit off. The defaults are common starting points, not a standard: set them from real
+traffic. A limit of N a minute lets a client send N at once, then refills evenly (one every 60/N
+seconds). A request past a limit gets a 429 problem reply with `Retry-After`, the seconds until the
+next one may go. Every reply a limit checked carries `X-RateLimit-Limit`, `X-RateLimit-Remaining`
+and `X-RateLimit-Reset` (when the count is full again, in Unix seconds), for the one limit that
+applies: the per-user limit signed in, the per-IP one otherwise. Paths no route matches (404, 405)
+aren't limited: they do no work.
+
+**Shared by every copy.** `cmd/api` counts in Valkey (`internal/ratelimit/valkey`, on
+[redis_rate](https://github.com/go-redis/redis_rate)): one atomic call per check, timed by Valkey's
+clock, so however many copies run, together they never let in more than the limit. Keys are
+`rate:api:<hash>`: not the IP or user ID in the clear, though an IPv4 address's hash can be found by
+trying every address. Each client active in the last minute holds one small key, in the same Valkey
+as everything else the programs share: size its memory for your peak of distinct clients, and alert
+on it, since a full Valkey refuses more than counts.
+
+**When Valkey fails.** A call that fails or takes over 250 ms makes that copy count in its own
+memory (`ratelimit.Memory`), logging one error: N copies then let in up to N times the limit (twice
+that across the turn of a minute), and the API keeps serving. In memory a copy holds at most
+100,000 clients a minute; past that, new ones go uncounted. Every 5 s one request tries Valkey
+again; when it answers, counting is shared again (logged at info). The rate limits don't need
+Valkey to start either; a job queue's connection, if the project has one, does.
+
+**The client's IP.** By default it's whoever opened the connection. Behind a load balancer or CDN
+that's the proxy, so every client would share one signed-out limit: set `TRUSTED_PROXIES` to the
+proxies' IP ranges. Requests from them then have the client's IP read from `X-Forwarded-For`, right
+to left, skipping trusted addresses, so what a client wrote there itself is never believed. A
+request that doesn't come from a trusted proxy is counted by its connection, whatever it sends; so
+is one from inside a trusted range with no readable `X-Forwarded-For` (the proxy's own, another
+service's). The first request with `X-Forwarded-For` from a sender outside the ranges is logged at
+warn, once per copy: a sign the setting is missing (or a client forging the header).
+
+Never trust a range clients can send from (the API refuses `0.0.0.0/0` and `::/0`), and never read
+the IP from a header yourself: use `middleware.GetClientIP(r.Context())`, the same IP the request
+log shows as `client.ip`.
+
+To count somewhere else, give `api.Limits` another `ratelimit.Limiter` in `cmd/api/main.go`: for a
+single copy, `ratelimit.NewMemory()`. Handlers and services don't change.
+
 ## IDs and paging
 
 - An ID that isn't a valid UUID is a 404, the same as an unknown one: it can't name anything.

@@ -21,6 +21,7 @@ import (
 	"github.com/mdayat/go-template/internal/db"
 	"github.com/mdayat/go-template/internal/httpclient"
 	"github.com/mdayat/go-template/internal/queue/valkey"
+	ratelimitvalkey "github.com/mdayat/go-template/internal/ratelimit/valkey"
 	"github.com/mdayat/go-template/internal/startup"
 )
 
@@ -31,6 +32,11 @@ const shutdownTimeout = 8 * time.Second
 
 // authKeysTimeout is how long one fetch of the sign-in provider's keys may take.
 const authKeysTimeout = 5 * time.Second
+
+// rateLimitTimeout is how long one Valkey call for the rate limits may take before this copy counts
+// on its own instead: the longest a slow or hung Valkey holds up a request, since after a failure
+// the copy stops calling it for a while.
+const rateLimitTimeout = 250 * time.Millisecond
 
 // buildVersion is set at build time with -ldflags "-X main.buildVersion=...", for builds that can't
 // see .git (the Docker build).
@@ -70,6 +76,15 @@ func run() error {
 	}
 	defer pool.Close()
 
+	// Not connected here: a Valkey that's down at startup must not stop the API, which counts in
+	// memory until Valkey answers (see valkey.Limiter).
+	limitsClient, err := startup.RedisFailFast(cfg.redisURL, rateLimitTimeout)
+	if err != nil {
+		return err
+	}
+	defer limitsClient.Close()
+	cfg.limits.Limiter = ratelimitvalkey.New(limitsClient, "api:", rateLimitTimeout, log.Logger)
+
 	// remove:worker
 	redisClient, err := startup.ConnectRedis(ctx, cfg.redisURL)
 	if err != nil {
@@ -91,7 +106,7 @@ func run() error {
 		return err
 	}
 	server := &http.Server{
-		Handler:           api.NewRouter(log.Logger, services, authn),
+		Handler:           api.NewRouter(log.Logger, services, authn, cfg.limits),
 		ErrorLog:          api.ServerErrorLog(log.Logger),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,

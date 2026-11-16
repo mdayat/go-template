@@ -16,8 +16,8 @@ Run `make fmt lint test check-generated`. All four must pass; don't silence a li
 `//nolint` unless the line is truly a false positive, and then name the linter and the reason.
 `make test` starts the compose services in Docker; tests read `TEST_DATABASE_URL` from the
 environment or `.env` (see `.example.env`).
-<!-- remove:worker -->
-Tests that queue jobs also read `TEST_REDIS_URL`.
+<!-- remove:valkey -->
+Tests that use Valkey also read `TEST_REDIS_URL`.
 <!-- remove:end -->
 
 ## Where things go
@@ -59,10 +59,14 @@ Use JSON only through `internal/json`, never go-json or `encoding/json` (tests m
 `encoding/json`); lint refuses it. Import pgx only in `internal/postgres`, `internal/startup`
 and `internal/testdb` (tests may use it to seed rows); lint refuses it elsewhere. A generated
 `pgtype` type gets an override in `sqlc.yaml` instead.
+<!-- remove:valkey -->
+Valkey connections come from `internal/startup`, opened in `cmd/` (tests': `internal/testredis`);
+lint refuses go-redis elsewhere.
+<!-- remove:end -->
 <!-- remove:worker -->
-Jobs are queued, handled and scheduled through `internal/queue`, never asynq or go-redis; lint
-refuses them outside `internal/queue/valkey`, `internal/startup` and `internal/testqueue`, and
-`internal/queue/valkey` itself outside `cmd/`.
+Jobs are queued, handled and scheduled through `internal/queue`, never asynq; lint refuses it
+outside `internal/queue/valkey` and `internal/testqueue`, and `internal/queue/valkey` itself
+outside `cmd/`.
 <!-- remove:end -->
 
 ## Rules
@@ -89,6 +93,10 @@ refuses them outside `internal/queue/valkey`, `internal/startup` and `internal/t
 - Handlers pass `currentUser(r)` to services, which decide who may do what: a user's own rows
   only (someone else's is `NotFound`, never `Forbidden`), an admin's everyone's. `Forbidden` (403)
   is for actions that are no secret, like an admin-only endpoint.
+- Rate limits (per client IP for requests without a valid sign-in, per signed-in user) are set in
+  `NewRouter` from `api.Limits`, counted through `ratelimit.Limiter` (`cmd/api` picks Valkey's).
+  Never read a client's IP from a header yourself: use `middleware.GetClientIP`, which trusts
+  `X-Forwarded-For` only from `TRUSTED_PROXIES`.
 
 <!-- remove:end -->
 **Logging** ([logging.md](docs/standards/logging.md))

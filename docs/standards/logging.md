@@ -32,6 +32,10 @@ that line, and a panic its stack: there is never a second line for the same fail
   stack.
 - A signed-in request carries `user.id`: our ID for the user, never the sign-in provider's ID for
   them or anything else about them.
+- `client.ip` is the client the [rate limits](http-api.md#rate-limits) count: behind
+  `TRUSTED_PROXIES`, the address the proxy added to `X-Forwarded-For`, with no `client.port`
+  (the connection's is the proxy's). When it can't be told (an unreadable `X-Forwarded-For`),
+  `client.address` is the connection's address instead.
 - A successful `/healthz` isn't logged: load balancers call it every few seconds.
 
 <!-- remove:end -->
@@ -95,6 +99,10 @@ Startup and shutdown use the global `log.Logger`, each program's lines carrying 
   (a failed accept, a handler writing headers twice) as `source: net/http`.
 <!-- remove:end -->
 <!-- remove:worker -->
-- The worker: `worker started`, `shutting down`, `worker stopped cleanly`; the queue client as
-  `source: go-redis`, and the job runner as `source: asynq`.
+- The worker: `worker started`, `shutting down`, `worker stopped cleanly`; the job runner as
+  `source: asynq`.
+<!-- remove:end -->
+<!-- remove:valkey -->
+- The Valkey client (a failed dial, a dropped connection) as `source: go-redis`, at warn: the call
+  that failed also returns its error.
 <!-- remove:end -->

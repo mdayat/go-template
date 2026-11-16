@@ -92,21 +92,48 @@ linters:
               desc: check tokens through the api.Authenticator that cmd/api passes in
             - pkg: github.com/MicahParks
               desc: check tokens through the api.Authenticator that cmd/api passes in
+        rate-limit-library:
+          files:
+            - $all
+            - "!$test"
+            - "!**/internal/ratelimit/valkey/*.go"
+          deny:
+            - pkg: github.com/go-redis/redis_rate
+              desc: count requests through ratelimit.Limiter
+        rate-limit-implementation:
+          # Only the programs pick the implementation.
+          files:
+            - $all
+            - "!$test"
+            - "!**/cmd/**/*.go"
+          deny:
+            - pkg: github.com/mdayat/go-template/internal/ratelimit/valkey
+              desc: use the ratelimit.Limiter passed in from cmd/
+        # remove:end
+        # remove:valkey
+        valkey-client:
+          # startup opens the connections and test helper packages give tests theirs. Code built on
+          # Valkey keeps it in a package named valkey.
+          files:
+            - $all
+            - "!$test"
+            - "!**/internal/startup/*.go"
+            - "!**/internal/test*/*.go"
+            - "!**/valkey/*.go"
+          deny:
+            - pkg: github.com/redis/go-redis
+              desc: take the client cmd/ opens with internal/startup
         # remove:end
         # remove:worker
         queue-library:
-          # Tests may use them to read what was queued. startup opens the connection and testqueue
-          # gives tests theirs.
+          # Tests may use it to read what was queued; testqueue gives them helpers for it.
           files:
             - $all
             - "!$test"
             - "!**/internal/queue/valkey/*.go"
-            - "!**/internal/startup/*.go"
             - "!**/internal/testqueue/*.go"
           deny:
             - pkg: github.com/hibiken/asynq
-              desc: queue and run jobs through internal/queue
-            - pkg: github.com/redis/go-redis
               desc: queue and run jobs through internal/queue
         queue-implementation:
           # Only the programs pick the implementation. Elsewhere its asynq types would get past the

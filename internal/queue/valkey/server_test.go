@@ -13,6 +13,7 @@ import (
 
 	"github.com/mdayat/go-template/internal/queue"
 	"github.com/mdayat/go-template/internal/testqueue"
+	"github.com/mdayat/go-template/internal/testredis"
 )
 
 // seenRun is what a handler saw of its first run, and whether the run said it would be retried.
@@ -33,7 +34,7 @@ type startedJob struct {
 // with maxRetries and timeout.
 func startJob(t *testing.T, handler queue.Handler, maxRetries int, timeout time.Duration) startedJob {
 	t.Helper()
-	client := testqueue.New(t)
+	client := testredis.New(t)
 	queueName := testqueue.NewQueue(t, client)
 	seen := make(chan seenRun, 10)
 
@@ -98,7 +99,7 @@ const (
 // succeeded is deleted (no retention is set).
 func jobState(t *testing.T, job startedJob) filedState {
 	t.Helper()
-	inspector := asynq.NewInspectorFromRedisClient(testqueue.New(t))
+	inspector := asynq.NewInspectorFromRedisClient(testredis.New(t))
 	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(50 * time.Millisecond) {
 		info, err := inspector.GetTaskInfo(job.queue, job.id)
 		switch {
@@ -192,7 +193,7 @@ func TestServerRunCutOffByShutdownIsRetried(t *testing.T) {
 
 func TestNewServerRefusesOptionsAsynqWouldReplace(t *testing.T) {
 	t.Parallel()
-	client := testqueue.New(t)
+	client := testredis.New(t)
 	valid := ServerOptions{Queues: []string{"default"}, ShutdownTimeout: time.Second}
 
 	tests := []struct {

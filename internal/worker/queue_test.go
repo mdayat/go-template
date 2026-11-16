@@ -14,6 +14,7 @@ import (
 	"github.com/mdayat/go-template/internal/queue"
 	"github.com/mdayat/go-template/internal/queue/valkey"
 	"github.com/mdayat/go-template/internal/testqueue"
+	"github.com/mdayat/go-template/internal/testredis"
 )
 
 // lineWriter hands each log line to the test as it's written; zerolog writes a line per call.
@@ -37,7 +38,7 @@ type queuedRun struct {
 // queues one job.
 func runOnQueue(t *testing.T, handler queue.Handler, maxRetries int, timeout time.Duration) queuedRun {
 	t.Helper()
-	client := testqueue.New(t)
+	client := testredis.New(t)
 	queueName := testqueue.NewQueue(t, client)
 	lines := make(lineWriter, 10)
 

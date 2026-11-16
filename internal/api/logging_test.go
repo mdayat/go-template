@@ -21,7 +21,7 @@ import (
 func testRouter(t *testing.T) (http.Handler, *bytes.Buffer) {
 	t.Helper()
 	var logs bytes.Buffer
-	router := newBaseRouter(zerolog.New(&logs))
+	router := newBaseRouter(zerolog.New(&logs), nil)
 	router.Get("/ok", func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("hello"))
 	})
@@ -234,7 +234,7 @@ func serveOnce(t *testing.T, path string, handler http.HandlerFunc) served {
 	t.Helper()
 	var logs bytes.Buffer
 	logger := zerolog.New(&logs)
-	router := newBaseRouter(logger)
+	router := newBaseRouter(logger, nil)
 	router.Get(path, handler)
 
 	server := httptest.NewUnstartedServer(router)
@@ -351,7 +351,7 @@ func TestAbortHandlerPassesThrough(t *testing.T) {
 // and flushing through http.ResponseController (the wrapper has to expose Unwrap).
 func TestResponseControllerWorksThroughLogging(t *testing.T) {
 	t.Parallel()
-	router := newBaseRouter(zerolog.Nop())
+	router := newBaseRouter(zerolog.Nop(), nil)
 	errs := make(chan error, 2)
 	router.Get("/stream", func(w http.ResponseWriter, _ *http.Request) {
 		rc := http.NewResponseController(w)

@@ -110,10 +110,15 @@ The rules for which error to return live in [errors.md](errors.md). Style only:
 - Import pgx only in `internal/postgres` and the code that opens or builds databases
   (`internal/startup`, `internal/testdb`); services recognise database errors through
   `internal/postgres`. Tests may use pgx to seed and read rows. — lint (depguard)
+<!-- remove:valkey -->
+- Open Valkey connections with `internal/startup` in `cmd/`, and pass them in; tests get theirs
+  from `internal/testredis`. go-redis stays in those and in packages named `valkey`, which build on
+  it. — lint (depguard)
+<!-- remove:end -->
 <!-- remove:worker -->
 - Queue, handle and schedule jobs through `internal/queue`; `cmd/` picks the implementation. asynq
-  and go-redis stay in `internal/queue/valkey`, `internal/startup` and `internal/testqueue`, and
-  `internal/queue/valkey` in `cmd/`. — lint (depguard)
+  stays in `internal/queue/valkey` and `internal/testqueue`, and `internal/queue/valkey` in
+  `cmd/`. — lint (depguard)
 <!-- remove:end -->
 - Call outside services with a client from `httpclient.New`, never `http.Get` or
   `http.DefaultClient`, which have no time limit ([outside-calls.md](outside-calls.md)). — lint
@@ -156,6 +161,7 @@ implementation and passes it in. Changing provider is then a new implementation 
 | Interface | Defined in | Implementations | Picked in |
 |---|---|---|---|
 | `api.Authenticator`: who a request's token belongs to | `internal/api` | `internal/auth/jwks`: JWTs checked against the issuer's published keys | `cmd/api` |
+| `ratelimit.Limiter`: whether one more request may go | `internal/ratelimit` | `internal/ratelimit/valkey` (shared by every copy, counting in memory while Valkey fails); `ratelimit.Memory` (one copy) | `cmd/api` |
 <!-- remove:end -->
 
 These are design patterns, and their names help when reading or adding one

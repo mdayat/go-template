@@ -7,8 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net/netip"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/joho/godotenv"
@@ -124,6 +126,41 @@ func (r *Reader) OptionalHTTPURL(key string) string {
 		return ""
 	}
 	return v
+}
+
+// Count returns the setting key, a whole number of 0 or more, or fallback if no source has it. A
+// value that isn't one is recorded as a problem.
+func (r *Reader) Count(key string, fallback int) int {
+	v := r.lookup(key)
+	if v == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 0 {
+		r.errs = append(r.errs, fmt.Errorf("%s must be a whole number, 0 or more", key))
+		return fallback
+	}
+	return n
+}
+
+// IPRanges returns the setting key, a comma-separated list of IP ranges in CIDR form (10.0.0.0/8,
+// 2001:db8::/32, 203.0.113.7/32 for one address), or nil if no source has it. A list with an entry
+// that isn't one is recorded as a problem.
+func (r *Reader) IPRanges(key string) []string {
+	v := r.lookup(key)
+	if v == "" {
+		return nil
+	}
+	var ranges []string
+	for entry := range strings.SplitSeq(v, ",") {
+		entry = strings.TrimSpace(entry)
+		if _, err := netip.ParsePrefix(entry); err != nil {
+			r.errs = append(r.errs, fmt.Errorf("%s must be comma-separated IP ranges like 10.0.0.0/8", key))
+			return nil
+		}
+		ranges = append(ranges, entry)
+	}
+	return ranges
 }
 
 // App holds the settings every program reads.

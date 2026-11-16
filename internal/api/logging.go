@@ -4,10 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"net"
 	"net/http"
+	"net/netip"
 	"runtime/debug"
-	"strconv"
 	"strings"
 	"time"
 
@@ -64,7 +63,7 @@ func logRequests(next http.Handler) http.Handler {
 			Dict("http", httpFields).
 			Dict("url", zerolog.Dict().Str("path", r.URL.Path)).
 			Dict("user_agent", zerolog.Dict().Str("original", r.UserAgent())).
-			Dict("client", clientFields(r.RemoteAddr)).
+			Dict("client", clientFields(r)).
 			Float64("duration_ms", float64(time.Since(start))/float64(time.Millisecond)).
 			Msg("request completed")
 
@@ -112,15 +111,18 @@ func (rc *recovery) serve(next http.Handler, ww middleware.WrapResponseWriter, r
 	next.ServeHTTP(ww, r)
 }
 
-// clientFields splits the connection's address into ip and port, so logs can be grouped by caller.
-func clientFields(remoteAddr string) *zerolog.Event {
-	host, port, err := net.SplitHostPort(remoteAddr)
-	if err != nil {
-		return zerolog.Dict().Str("address", remoteAddr)
+// clientFields names who sent r, so logs can be grouped by caller: the client's IP as clientIP found
+// it (the same one the rate limits count), with the connection's port when the connection is the
+// client's own rather than a proxy's. When the client couldn't be told, the connection's address.
+func clientFields(r *http.Request) *zerolog.Event {
+	ip := middleware.GetClientIPAddr(r.Context())
+	if !ip.IsValid() {
+		return zerolog.Dict().Str("address", r.RemoteAddr)
 	}
-	fields := zerolog.Dict().Str("ip", host)
-	if n, err := strconv.Atoi(port); err == nil {
-		fields.Int("port", n)
+	fields := zerolog.Dict().Str("ip", ip.String())
+	peer, err := netip.ParseAddrPort(r.RemoteAddr)
+	if err == nil && peer.Addr().Unmap() == ip {
+		fields.Int("port", int(peer.Port()))
 	}
 	return fields
 }

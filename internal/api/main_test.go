@@ -19,7 +19,7 @@ import (
 	"github.com/mdayat/go-template/internal/httpclient"
 	"github.com/mdayat/go-template/internal/queue/valkey"
 	"github.com/mdayat/go-template/internal/testdb"
-	"github.com/mdayat/go-template/internal/testqueue"
+	"github.com/mdayat/go-template/internal/testredis"
 )
 
 func TestMain(m *testing.M) {
@@ -31,18 +31,27 @@ func TestMain(m *testing.M) {
 
 // testAPI returns the real router and every feature's service, built by NewServices as in the app,
 // on a database of the test's own. Every endpoint test uses it. Requests are signed in as
-// testSubject unless they carry their own Authorization header, through the real token check.
+// testSubject unless they carry their own Authorization header, through the real token check. No
+// rate limits: ratelimit_test.go has those.
 func testAPI(t *testing.T) (http.Handler, *pgxpool.Pool) {
+	t.Helper()
+	router, pool, issuer := testAPIWith(t, Limits{})
+	return signedIn(router, issuer.Token(testSubject)), pool
+}
+
+// testAPIWith is testAPI with limits, and without signing requests in: each needs a token from
+// issuer.
+func testAPIWith(t *testing.T, limits Limits) (http.Handler, *pgxpool.Pool, *authtest.Issuer) {
 	t.Helper()
 	pool := testdb.New(t)
 	services := NewServices(
 		db.New(pool),
 		// remove:worker
-		valkey.NewEnqueuer(testqueue.New(t)), // the test job queue
+		valkey.NewEnqueuer(testredis.New(t)), // the test job queue
 		// remove:end
 	)
 	authn, issuer := testAuthenticator(t)
-	return signedIn(NewRouter(zerolog.Nop(), services, authn), issuer.Token(testSubject)), pool
+	return NewRouter(zerolog.Nop(), services, authn, limits), pool, issuer
 }
 
 // testSubject is who testAPI's requests are signed in as.

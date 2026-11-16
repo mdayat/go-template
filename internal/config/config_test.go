@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -222,6 +223,61 @@ func TestOptionalHTTPURL(t *testing.T) {
 		}
 		if err != nil && (strings.Contains(err.Error(), "s3cret") || !strings.Contains(err.Error(), "HOOK_URL")) {
 			t.Errorf("OptionalHTTPURL(%q) error = %q, want it to name HOOK_URL and quote no value", tt.value, err)
+		}
+	}
+}
+
+func TestCount(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		value  string
+		want   int
+		wantOK bool
+	}{
+		{"", 7, true},
+		{"0", 0, true},
+		{"600", 600, true},
+		{"-1", 7, false},
+		{"1.5", 7, false},
+		{"ten", 7, false},
+	}
+	for _, tt := range tests {
+		r := NewReader(Map{"LIMIT": tt.value})
+
+		got := r.Count("LIMIT", 7)
+		err := r.Err()
+
+		if got != tt.want || (err == nil) != tt.wantOK {
+			t.Errorf("Count(%q) = %d, error %v; want %d, ok = %v", tt.value, got, err, tt.want, tt.wantOK)
+		}
+	}
+}
+
+func TestIPRanges(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		value  string
+		want   []string
+		wantOK bool
+	}{
+		{"", nil, true},
+		{"10.0.0.0/8", []string{"10.0.0.0/8"}, true},
+		{"10.0.0.0/8, 2001:db8::/32 ,203.0.113.7/32", []string{"10.0.0.0/8", "2001:db8::/32", "203.0.113.7/32"}, true},
+		// A bare address, which chi's middleware would refuse with a panic.
+		{"10.0.0.1", nil, false},
+		{"10.0.0.0/8,", nil, false},
+		{"10.0.0.0/33", nil, false},
+	}
+	for _, tt := range tests {
+		r := NewReader(Map{"PROXIES": tt.value})
+
+		got := r.IPRanges("PROXIES")
+		err := r.Err()
+
+		if !slices.Equal(got, tt.want) || (err == nil) != tt.wantOK {
+			t.Errorf("IPRanges(%q) = %q, error %v; want %q, ok = %v", tt.value, got, err, tt.want, tt.wantOK)
 		}
 	}
 }

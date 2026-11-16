@@ -10,13 +10,14 @@ import (
 
 	"github.com/mdayat/go-template/internal/queue"
 	"github.com/mdayat/go-template/internal/testqueue"
+	"github.com/mdayat/go-template/internal/testredis"
 )
 
 // Two workers' schedulers fire at the same moments; Unique lets one copy of the job through, with
 // the job's own options.
 func TestSchedulersQueueEachJobOnce(t *testing.T) {
 	t.Parallel()
-	client := testqueue.New(t)
+	client := testredis.New(t)
 	queueName := testqueue.NewQueue(t, client)
 	schedule := queue.Schedule{
 		Spec:   "@every 1s",
@@ -56,7 +57,7 @@ func TestSchedulersQueueEachJobOnce(t *testing.T) {
 // A schedule asynq would take and then fail on when the job fires is refused at startup.
 func TestNewSchedulerRefusesBadSchedules(t *testing.T) {
 	t.Parallel()
-	client := testqueue.New(t)
+	client := testredis.New(t)
 	valid := queue.Schedule{
 		Spec:   "@daily",
 		Job:    queue.Job{Type: "test:scheduled", Queue: "default", Timeout: time.Minute},

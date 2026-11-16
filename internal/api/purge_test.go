@@ -15,6 +15,7 @@ import (
 	"github.com/mdayat/go-template/internal/queue/valkey"
 	"github.com/mdayat/go-template/internal/testdb"
 	"github.com/mdayat/go-template/internal/testqueue"
+	"github.com/mdayat/go-template/internal/testredis"
 )
 
 // The endpoint queues the job with the age the caller asked for; the worker removes the rows. It
@@ -31,7 +32,7 @@ func TestPurgeDeletedRowsQueuesAJob(t *testing.T) {
 	}
 	var reply jobResponse
 	decodeReply(t, rec, &reply)
-	job := testqueue.Take(t, testqueue.New(t), jobs.Queue, reply.JobID)
+	job := testqueue.Take(t, testredis.New(t), jobs.Queue, reply.JobID)
 	if job.Type != jobs.TypePurgeDeletedRows || job.Timeout != 5*time.Minute || job.MaxRetry != 5 {
 		t.Errorf("queued job = type %q, timeout %s, max retry %d; want %q, 5m0s, 5",
 			job.Type, job.Timeout, job.MaxRetry, jobs.TypePurgeDeletedRows)
@@ -87,7 +88,7 @@ func TestPurgeDeletedRowsQueueDownIs500(t *testing.T) {
 	authn, issuer := testAuthenticator(t)
 	pool := testdb.New(t)
 	testUser(t, pool, true)
-	router := signedIn(NewRouter(zerolog.Nop(), NewServices(db.New(pool), valkey.NewEnqueuer(down)), authn),
+	router := signedIn(NewRouter(zerolog.Nop(), NewServices(db.New(pool), valkey.NewEnqueuer(down)), authn, Limits{}),
 		issuer.Token(testSubject))
 
 	rec := send(t, router, http.MethodPost, "/deleted-row-purges", `{"older_than_days":30}`)

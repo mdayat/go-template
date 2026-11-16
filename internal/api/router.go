@@ -70,13 +70,16 @@ func NewServices(
 }
 
 // NewRouter returns the API's routes, each request logged to logger. Every route but the health
-// check needs someone signed in, as authn says.
-func NewRouter(logger zerolog.Logger, services Services, authn Authenticator) *chi.Mux {
-	router := newBaseRouter(logger)
+// check needs someone signed in, as authn says, and is rate limited as limits says.
+func NewRouter(logger zerolog.Logger, services Services, authn Authenticator, limits Limits) *chi.Mux {
+	router := newBaseRouter(logger, limits.TrustedProxies)
 	// One decoder for every feature: the validator caches what it learns about each type.
 	decoder := newBodyDecoder()
 	router.Group(func(r chi.Router) {
-		r.Use(authenticate(authn, services.Users))
+		r.Use(
+			authenticate(authn, services.Users, signedOutLimit(limits.PerIP, limits.Limiter)),
+			limitPerUser(limits.PerUser, limits.Limiter),
+		)
 		taskRoutes{tasks: services.Tasks, decoder: decoder}.mount(r)
 		// remove:worker
 		purgeRoutes{jobs: services.Jobs, decoder: decoder}.mount(r)
@@ -86,11 +89,14 @@ func NewRouter(logger zerolog.Logger, services Services, authn Authenticator) *c
 }
 
 // newBaseRouter returns a router with the middleware every route shares, the health check, and
-// problem replies for unmatched paths and methods. Features add their routes to it.
-func newBaseRouter(logger zerolog.Logger) *chi.Mux {
+// problem replies for unmatched paths and methods. Features add their routes to it. The client's
+// IP is read as Limits.TrustedProxies says.
+func newBaseRouter(logger zerolog.Logger, trustedProxies []string) *chi.Mux {
 	router := chi.NewRouter()
 	router.Use(
 		hlog.NewHandler(logger),
+		// Before logRequests, which logs the client's IP from the request this one passes on.
+		clientIP(trustedProxies, logger),
 		// A fresh ID per request, never one sent by the client, which could be forged.
 		hlog.RequestIDHandler("request_id", "X-Request-Id"),
 		logRequests,

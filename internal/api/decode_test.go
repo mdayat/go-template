@@ -48,7 +48,7 @@ type testLimits struct {
 // decodeRouter echoes a decoded testTask, so a test sees exactly what decode produced.
 func decodeRouter(t *testing.T) http.Handler {
 	t.Helper()
-	router := newBaseRouter(zerolog.Nop())
+	router := newBaseRouter(zerolog.Nop(), nil)
 	decoder := newBodyDecoder()
 	router.Post("/tasks", Handle(func(w http.ResponseWriter, r *http.Request) error {
 		var task testTask
@@ -238,7 +238,7 @@ func (e errAfter) Read(p []byte) (int, error) {
 func TestDecodeBodyThatBreaksMidRead(t *testing.T) {
 	t.Parallel()
 	var logs bytes.Buffer
-	router := newBaseRouter(zerolog.New(&logs))
+	router := newBaseRouter(zerolog.New(&logs), nil)
 	decoder := newBodyDecoder()
 	router.Post("/tasks", Handle(func(w http.ResponseWriter, r *http.Request) error {
 		var task testTask

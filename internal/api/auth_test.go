@@ -33,8 +33,8 @@ func protectedRouter(t *testing.T, cfg jwks.Config) (http.Handler, *pgxpool.Pool
 	}
 	pool := testdb.New(t)
 	var logs bytes.Buffer
-	router := newBaseRouter(zerolog.New(&logs))
-	router.With(authenticate(authn, user.NewService(db.New(pool)))).Get("/private", func(w http.ResponseWriter, _ *http.Request) {
+	router := newBaseRouter(zerolog.New(&logs), nil)
+	router.With(authenticate(authn, user.NewService(db.New(pool)), nil)).Get("/private", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
 	return router, pool, &logs

@@ -13,7 +13,7 @@ import (
 
 func TestHealthzAnswersGetAndHead(t *testing.T) {
 	t.Parallel()
-	router := newBaseRouter(zerolog.Nop())
+	router := newBaseRouter(zerolog.Nop(), nil)
 
 	for _, method := range []string{http.MethodGet, http.MethodHead} {
 		rec := httptest.NewRecorder()

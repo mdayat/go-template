@@ -90,7 +90,7 @@ jobs:
       - name: Test
         env:
           TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
-          # remove:worker
+          # remove:valkey
           TEST_REDIS_URL: redis://localhost:6379/1
           # remove:end
         run: make test

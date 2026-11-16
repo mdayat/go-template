@@ -2,8 +2,10 @@ package main
 
 import (
 	"errors"
+	"net/netip"
 	"net/url"
 
+	"github.com/mdayat/go-template/internal/api"
 	"github.com/mdayat/go-template/internal/auth/jwks"
 	"github.com/mdayat/go-template/internal/config"
 )
@@ -14,9 +16,8 @@ type settings struct {
 	httpAddr    string
 	databaseURL string
 	auth        jwks.Config // whose sign-in tokens to accept
-	// remove:worker
-	redisURL string // the job queue
-	// remove:end
+	limits      api.Limits  // all but Limiter, which run sets
+	redisURL    string      // the Valkey that every copy of the API shares
 }
 
 // loadSettings reads the API's settings from sources, the first winning, and reports every missing
@@ -32,11 +33,15 @@ func loadSettings(sources ...config.Source) (settings, error) {
 			Issuer:   r.Required("AUTH_ISSUER"),
 			Audience: r.Required("AUTH_AUDIENCE"),
 		},
-		// remove:worker
+		limits: api.Limits{
+			TrustedProxies: r.IPRanges("TRUSTED_PROXIES"),
+			PerIP:          r.Count("RATE_LIMIT_PER_IP", 600),
+			PerUser:        r.Count("RATE_LIMIT_PER_USER", 120),
+		},
 		redisURL: r.Required("REDIS_URL"),
-		// remove:end
 	}
-	if err := errors.Join(r.Err(), checkKeysURL(s.app.Env, s.auth.KeysURL)); err != nil {
+	err := errors.Join(r.Err(), checkKeysURL(s.app.Env, s.auth.KeysURL), checkTrustedProxies(s.limits.TrustedProxies))
+	if err != nil {
 		return settings{}, err
 	}
 	return s, nil
@@ -60,4 +65,21 @@ func checkKeysURL(env, keysURL string) error {
 	default:
 		return errors.New("AUTH_JWKS_URL must be an https://, http:// or file:// URL")
 	}
+}
+
+// checkTrustedProxies refuses ranges that would let any client pick its IP (0.0.0.0/0, ::/0: every
+// sender is "a proxy", so X-Forwarded-For is always believed), and IPv4 ranges written as IPv6
+// (::ffff:10.0.0.0/104), which never match: chi compares a proxy's address in its IPv4 form.
+func checkTrustedProxies(ranges []string) error {
+	for _, r := range ranges {
+		// The reader has already refused a list with an entry that doesn't parse, and returned none.
+		prefix := netip.MustParsePrefix(r)
+		switch {
+		case prefix.Bits() == 0:
+			return errors.New("TRUSTED_PROXIES must not hold 0.0.0.0/0 or ::/0: any client could then pick its IP")
+		case prefix.Addr().Is4In6():
+			return errors.New("TRUSTED_PROXIES must write IPv4 ranges as IPv4 (10.0.0.0/8, not ::ffff:10.0.0.0/104)")
+		}
+	}
+	return nil
 }

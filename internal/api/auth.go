@@ -26,13 +26,17 @@ const signInRequired = "a valid sign-in token is required"
 // authenticate lets through only requests carrying a token authn accepts, sent as
 // "Authorization: Bearer <token>", and turns who it is into our user through users, recording them
 // on their first sign-in. Anything else gets a 401, or a 503 when authn can't check tokens at all:
-// an outage on our side, which a client may retry.
-func authenticate(authn Authenticator, users *user.Service) func(http.Handler) http.Handler {
+// an outage on our side, which a client may retry. Each 401 counts against signedOut, which replies
+// 429 instead once the client is past it.
+func authenticate(authn Authenticator, users *user.Service, signedOut *rateLimit) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			id, err := identify(r, authn)
 			if err != nil {
 				if e, ok := errors.AsType[*apperr.Error](err); ok && e.Kind == apperr.KindUnauthenticated {
+					if !signedOut.check(w, r) {
+						return
+					}
 					// Tells the client which kind of credentials to send (RFC 6750).
 					w.Header().Set("WWW-Authenticate", "Bearer")
 				}

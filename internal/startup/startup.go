@@ -27,7 +27,7 @@ func SetupLogger(app config.App) {
 	}
 	// zerolog.Ctx on a context without a logger returns this one; the default drops every line.
 	zerolog.DefaultContextLogger = &log.Logger
-	// remove:worker
+	// remove:valkey
 	// go-redis's own messages go to the same log.
 	redis.SetLogger(redisLogger{logger: log.Logger})
 	// remove:end

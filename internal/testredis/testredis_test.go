@@ -1,4 +1,4 @@
-package testqueue
+package testredis
 
 import "testing"
 

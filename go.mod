@@ -6,6 +6,7 @@ require (
 	github.com/MicahParks/keyfunc/v3 v3.9.2
 	github.com/go-chi/chi/v5 v5.5.0
 	github.com/go-playground/validator/v10 v10.30.6
+	github.com/go-redis/redis_rate/v10 v10.0.1
 	github.com/goccy/go-json v0.12.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/go-cmp v0.7.0

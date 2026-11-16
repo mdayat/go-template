@@ -16,8 +16,9 @@ services:
       timeout: 5s
       retries: 15
 
-  # remove:worker
-  # The job queue. Valkey is an open-source (BSD) fork of Redis; asynq and go-redis treat it as Redis.
+  # remove:valkey
+  # What every copy of the programs shares. Valkey is an open-source (BSD) fork of Redis; go-redis
+  # treats it as Redis.
   valkey:
     image: valkey/valkey:8-alpine
     ports:
@@ -34,6 +35,6 @@ services:
 
 volumes:
   postgres-data:
-  # remove:worker
+  # remove:valkey
   valkey-data:
   # remove:end

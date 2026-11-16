@@ -6,7 +6,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/mdayat/go-template/internal/queue/valkey"
-	"github.com/mdayat/go-template/internal/testqueue"
+	"github.com/mdayat/go-template/internal/testredis"
 	"github.com/mdayat/go-template/internal/worker"
 )
 
@@ -20,7 +20,7 @@ func TestTheQueueAcceptsTheWorkersSchedules(t *testing.T) {
 	}
 
 	// Not started: registering is what checks the schedules.
-	if _, err := valkey.NewScheduler(testqueue.New(t), zerolog.Nop(), schedules); err != nil {
+	if _, err := valkey.NewScheduler(testredis.New(t), zerolog.Nop(), schedules); err != nil {
 		t.Errorf("valkey.NewScheduler(worker.Schedules()) error = %v", err)
 	}
 }

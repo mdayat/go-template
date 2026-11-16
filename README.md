@@ -39,8 +39,9 @@ jobs. Keep both, one or neither: see [Choose what you need](#choose-what-you-nee
 | Path | What |
 |---|---|
 | `cmd/api` | the HTTP server: settings, Postgres pool, timeouts, clean shutdown on SIGTERM |
-| `internal/api` | routes, one JSON log line per request, [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) error replies, JSON body reading, sign-in on every route but the health check |
+| `internal/api` | routes, one JSON log line per request, [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) error replies, JSON body reading, sign-in and [rate limits](docs/standards/http-api.md#rate-limits) on every route but the health check |
 | `internal/auth` | who signed in, as a provider proved it; `internal/auth/jwks` checks JWTs against the issuer's published keys (Firebase, Auth0, Cognito, Keycloak, Supabase; see [signing in](docs/standards/http-api.md#signing-in)) |
+| `internal/ratelimit` | counting requests for the rate limits: in Valkey (`internal/ratelimit/valkey`), shared by every copy of the API, or in memory |
 | `internal/authtest`, `scripts/devtoken` | a stand-in sign-in provider: for tests, and for local runs (`make dev-token`) |
 | `docs/standards/http-api.md` | [the HTTP API's rules](docs/standards/http-api.md) |
 
@@ -54,9 +55,19 @@ jobs. Keep both, one or neither: see [Choose what you need](#choose-what-you-nee
 | `internal/queue` | what the code knows about the job queue (a job, queueing it, handling it, a timetable), with the asynq implementation on Valkey in `internal/queue/valkey` |
 | `internal/jobs` | each background job's name, payload and options, shared by every program that queues or runs it |
 | `internal/worker` | job handlers, one JSON log line per job, retries, the schedule |
-| `internal/startup/redis.go` | the Valkey connection |
-| `internal/testqueue` | a Valkey connection for tests, on a database the app never uses |
+| `internal/testqueue` | helpers for tests that queue jobs |
 | `docs/standards/worker.md` | [the rules for jobs](docs/standards/worker.md) |
+
+<!-- remove:end -->
+<!-- remove:valkey -->
+### Valkey
+
+[Valkey](https://valkey.io) (an open-source Redis) holds what every copy of the programs shares.
+
+| Path | What |
+|---|---|
+| `internal/startup/redis.go` | the Valkey connections |
+| `internal/testredis` | a Valkey connection for tests, on a database the app never uses |
 
 <!-- remove:end -->
 ## Prerequisites
@@ -94,9 +105,12 @@ jobs. Keep both, one or neither: see [Choose what you need](#choose-what-you-nee
      a token. Start the API with `make run`, then open http://localhost:8080/healthz; every other
      route needs `Authorization: Bearer <token>`.
    <!-- remove:end -->
+   <!-- remove:valkey -->
+   If another Redis already uses port 6379, change `VALKEY_PORT` and the port in `REDIS_URL` and
+   `TEST_REDIS_URL` in `.env`.
+   <!-- remove:end -->
    <!-- remove:worker -->
-   - Start the worker with `make run-worker` (in another terminal). For another Redis on port
-     6379, change `VALKEY_PORT` and the port in `REDIS_URL` and `TEST_REDIS_URL` in `.env`.
+   - Start the worker with `make run-worker` (in another terminal).
    <!-- remove:end -->
 
 ## Everyday commands
@@ -187,9 +201,9 @@ git sees, so `git restore . && git clean -fd` undoes it.
 
 | You want | Run | What goes |
 |---|---|---|
-| the HTTP API only | `make remove what=worker` | the worker and the whole job queue: Valkey, `REDIS_URL`, the purge endpoint |
-| the worker only | `make remove what=api` | the API and its settings (`HTTP_ADDR`) |
-| neither: a program of your own | both of the above | both, leaving the shared core and every standard's example |
+| the HTTP API only | `make remove what=worker` | the worker and the whole job queue (asynq), the purge endpoint |
+| the worker only | `make remove what=api` | the API and its settings (`HTTP_ADDR`, sign-in, rate limits) |
+| neither: a program of your own | both of the above | both, and Valkey (`REDIS_URL`), which only they use; leaving the shared core and every standard's example |
 | both | `make remove what=markers` | only the `remove:` comments in the files, and the remove tool |
 
 Each removal deletes the part's folders and the lines marked for it in shared files, then
@@ -231,6 +245,9 @@ Build the images with `make image` (on an arm64 Mac, for amd64 servers:
 The API serves `GET /healthz` on port 8080: point the platform's health check at it. The image
 has no shell, so a Docker `HEALTHCHECK` can't run inside it. On SIGTERM the API refuses new
 requests, gives running ones up to 8 s, then closes whatever is left and exits.
+
+Behind a load balancer or CDN, set `TRUSTED_PROXIES` to its IP ranges, or every signed-out client
+shares one rate limit (the proxy's); see [rate limits](docs/standards/http-api.md#rate-limits).
 
 Set `AUTH_JWKS_URL`, `AUTH_ISSUER` and `AUTH_AUDIENCE` to your sign-in provider's (an https://
 keys URL that answers 200 itself, not a redirect; the API refuses anything else in production).
