@@ -16,4 +16,5 @@ type Task struct {
 	Done      bool
 	CreatedAt time.Time
 	UpdatedAt time.Time
+	DeletedAt *time.Time
 }

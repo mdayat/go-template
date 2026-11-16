@@ -8,7 +8,8 @@ import (
 	"github.com/mdayat/go-template/internal/queue"
 )
 
-// TypePurgeDoneTasks deletes tasks marked done long ago; see task.Service.PurgeDone.
+// TypePurgeDoneTasks removes for good the tasks deleted or marked done long ago; see
+// task.Service.PurgeDone.
 const TypePurgeDoneTasks = "tasks:purge_done"
 
 // PurgeDoneTasks is the payload of a TypePurgeDoneTasks job.
@@ -16,7 +17,8 @@ type PurgeDoneTasks struct {
 	OlderThanDays int `json:"older_than_days"`
 }
 
-// NewPurgeDoneTasks returns a job that deletes tasks marked done more than olderThanDays days ago.
+// NewPurgeDoneTasks returns a job that removes for good the tasks deleted, or marked done, more
+// than olderThanDays days ago.
 func NewPurgeDoneTasks(olderThanDays int) (queue.Job, error) {
 	payload, err := json.Marshal(PurgeDoneTasks{OlderThanDays: olderThanDays})
 	if err != nil {

@@ -3,6 +3,7 @@ sql:
   - engine: postgresql
     schema: db/schema.sql
     queries: db/queries
+    rules: [skips-deleted-rows]
     gen:
       go:
         package: db
@@ -29,3 +30,19 @@ sql:
               import: time
               type: Time
               pointer: true
+
+# Checked by make lint (sqlc vet), on each query's text as sqlc sends it: line comments dropped
+# (but the "-- name:" line) and SELECT * spelled out, so every query names deleted_at somewhere.
+rules:
+  # A query on a soft-deleted table must filter on deleted_at: a condition right after WHERE, AND,
+  # OR or ON (deleted_at in the select list or a SET doesn't count). An INSERT reading no table is
+  # exempt. One that must see deleted rows too ends its name in IncludingDeleted, so its callers
+  # see that as well. Not caught, so review checks them: a join filtering only one of two such
+  # tables, and a condition inside a /* */ comment. Add each soft-deleted table to the list.
+  - name: skips-deleted-rows
+    message: "skips no deleted rows: add a deleted_at condition (docs/standards/database.md#soft-delete)"
+    rule: >-
+      ["tasks"].exists(t, query.sql.matches("(?i)\\b" + t + "\\b"))
+      && !(query.sql.matches(r"(?i)^(--[^\n]*\n)?\s*insert\b") && !query.sql.matches(r"(?i)\bfrom\b"))
+      && !query.sql.matches(r"(?i)\b(where|and|or|on)\s+\(*\s*(\w+\.)?deleted_at\s*(is\s|isnull\b|notnull\b|<|>|=)")
+      && !query.name.endsWith("IncludingDeleted")

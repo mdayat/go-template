@@ -118,6 +118,10 @@ refuses them outside `internal/queue/valkey`, `internal/startup` and `internal/t
   rename or drop a column over several deploys; big-table indexes `CONCURRENTLY` with
   `-- atlas:txmode none`.
 - Rules that must hold under concurrent requests are schema constraints, with names.
+- Deletes are soft (`deleted_at`): every query skips deleted rows (`deleted_at IS NULL`, on every
+  soft-deleted table in a join), unless its name ends in `IncludingDeleted`; `make lint` (`sqlc
+  vet`) refuses one that doesn't. A new table goes in that rule's list in `sqlc.yaml`. Unique
+  rules are partial indexes `WHERE deleted_at IS NULL`.
 - Text going into a `text` column is checked for NUL (`\u0000`) in the service; Postgres refuses it.
 - Retry a transaction only on 40001 and 40P01, and never do outside calls inside it.
 

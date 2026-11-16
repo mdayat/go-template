@@ -25,7 +25,8 @@ const (
 	// MaxPurgeAgeDays is the oldest age PurgeDone accepts, about ten years.
 	MaxPurgeAgeDays = 3650
 
-	// The constraint behind a duplicate title, from db/schema.sql.
+	// The unique index behind a duplicate title, from db/schema.sql. Postgres reports a unique
+	// index's name as the violated constraint's.
 	titleUniqueConstraint = "tasks_title_key"
 )
 
@@ -56,7 +57,7 @@ type Changes struct {
 	Done  *bool
 }
 
-// Service creates, reads, updates and deletes tasks.
+// Service creates, reads, updates, deletes and restores tasks.
 type Service struct {
 	queries *db.Queries
 }
@@ -146,7 +147,8 @@ func (s *Service) Update(ctx context.Context, id uuid.UUID, changes Changes) (Ta
 	return fromRow(row), nil
 }
 
-// Delete removes the task with id.
+// Delete hides the task with id: every other method then treats it as not found, and Restore
+// brings it back. Deleting it again is NotFound.
 func (s *Service) Delete(ctx context.Context, id uuid.UUID) error {
 	deleted, err := s.queries.DeleteTask(ctx, id)
 	if err != nil {
@@ -158,8 +160,24 @@ func (s *Service) Delete(ctx context.Context, id uuid.UUID) error {
 	return nil
 }
 
-// PurgeDone deletes the tasks marked done whose last change is more than olderThanDays days ago,
-// and returns how many it deleted. Running it again deletes nothing more, so a repeated run is safe.
+// Restore brings back the deleted task with id, as changed now. A task that isn't deleted is
+// returned unchanged, so a repeated restore is safe. It's a Conflict when a live task has taken the
+// title since.
+func (s *Service) Restore(ctx context.Context, id uuid.UUID) (Task, error) {
+	row, err := s.queries.RestoreTask(ctx, id)
+	if postgres.IsNotFound(err) {
+		// Not deleted: live (an earlier restore), or no such task.
+		return s.Get(ctx, id)
+	}
+	if err != nil {
+		return Task{}, fmt.Errorf("restore task %s: %w", id, conflictOr(err))
+	}
+	return fromRow(row), nil
+}
+
+// PurgeDone removes for good the tasks deleted more than olderThanDays days ago, and the live tasks
+// marked done whose last change is that old, and returns how many it removed. Running it again
+// deletes nothing more, so a repeated run is safe.
 func (s *Service) PurgeDone(ctx context.Context, olderThanDays int) (int64, error) {
 	if err := CheckPurgeAge(olderThanDays); err != nil {
 		return 0, err

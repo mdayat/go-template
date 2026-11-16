@@ -60,6 +60,48 @@ migration must work with the code before it **and** after it. Atlas Community do
 - After a loop over `rows.Next()`, check `rows.Err()` (lint: rowserrcheck); sqlc's generated code
   does.
 
+## Soft delete
+
+Deleting a row only marks it: `deleted_at` is set to the time of the delete, and NULL means the
+row is live. The row keeps its history and links, and a delete can be undone. The tasks example
+does this: `task.Service.Delete` marks the task, `Restore` clears the mark.
+
+A deleted row is still in the table, so every rule below exists to keep it out of sight:
+
+- **Every query skips deleted rows** (`AND deleted_at IS NULL`), including updates and deletes.
+  `make lint` runs `sqlc vet`, which refuses a query on a soft-deleted table with no `deleted_at`
+  condition (the rule is in `sqlc.yaml`: add each new soft-deleted table to its list). A query
+  that must see deleted rows too ends its name in `IncludingDeleted`, so its callers see it: an
+  "only once" check (a refunded payment still counts), a lookup by an outside service's ID (a
+  repeated callback must find the row).
+- **A join needs the condition on every soft-deleted table in it**, in its `JOIN ... ON` or
+  `WHERE`: a live row can point at a deleted parent. `sqlc vet` sees one condition and is satisfied,
+  so review checks the rest.
+- **Unique rules cover live rows only**: a partial unique index, `CREATE UNIQUE INDEX
+  tasks_title_key ON tasks (title) WHERE deleted_at IS NULL`, not a `UNIQUE` constraint, or a
+  deleted row's title can never be used again. Name the index as the constraint would be named:
+  the service matches the duplicate by that name. Indexes for lists get the same `WHERE`. An
+  `INSERT ... ON CONFLICT (title)` must repeat it (`ON CONFLICT (title) WHERE deleted_at IS NULL`),
+  or Postgres finds no index to match and fails.
+- **Restoring can break a unique rule** (a live row took the value meanwhile): it's a `Conflict`,
+  and the row stays deleted. A restore is a change: it sets `updated_at`, so work that ages rows
+  by their last change (the purge below) doesn't remove one just brought back.
+- **`ON DELETE CASCADE` doesn't fire**: nothing is deleted. A child that must go with its parent is
+  marked in the same transaction, or its queries join the parent and skip deleted parents.
+- **Deleted rows are removed for good after a while** (30 days is common; for tasks,
+  `task.Service.PurgeDone` does it): tables keep growing otherwise, and personal data shouldn't
+  stay once a user asked to delete it (privacy laws such as the GDPR give about a month). Records
+  the law says to keep (payments, invoices) aren't removed on that timetable.
+- **Adding `deleted_at` to a table in use:** while the deploy runs, the old app still shows rows
+  the new one marks deleted, for those minutes. On a big table, build the partial unique index
+  `CONCURRENTLY` under a new name in a migration of its own
+  ([above](#migrations-that-are-safe-while-the-old-app-runs)), then drop the old constraint in a
+  later one, so values stay checked and writes don't wait. Until then a duplicate may be reported
+  under either name: the service matches both.
+
+Soft delete keeps only a row's last state. To know who changed what and when, keep a separate
+history (audit) table.
+
 ## Transactions and retries
 
 A service that needs several statements to succeed or fail together runs them in one

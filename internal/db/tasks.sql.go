@@ -13,11 +13,14 @@ import (
 )
 
 const createTask = `-- name: CreateTask :one
+
 INSERT INTO tasks (title)
 VALUES ($1)
-RETURNING id, title, done, created_at, updated_at
+RETURNING id, title, done, created_at, updated_at, deleted_at
 `
 
+// Every query on tasks skips deleted rows (deleted_at IS NULL), or its name ends in
+// IncludingDeleted; make lint (sqlc vet) refuses any other. See docs/standards/database.md.
 func (q *Queries) CreateTask(ctx context.Context, title string) (Task, error) {
 	row := q.db.QueryRow(ctx, createTask, title)
 	var i Task
@@ -27,13 +30,16 @@ func (q *Queries) CreateTask(ctx context.Context, title string) (Task, error) {
 		&i.Done,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.DeletedAt,
 	)
 	return i, err
 }
 
 const deleteTask = `-- name: DeleteTask :execrows
-DELETE FROM tasks
+UPDATE tasks
+SET deleted_at = now()
 WHERE id = $1
+  AND deleted_at IS NULL
 `
 
 func (q *Queries) DeleteTask(ctx context.Context, id uuid.UUID) (int64, error) {
@@ -45,9 +51,10 @@ func (q *Queries) DeleteTask(ctx context.Context, id uuid.UUID) (int64, error) {
 }
 
 const getTask = `-- name: GetTask :one
-SELECT id, title, done, created_at, updated_at
+SELECT id, title, done, created_at, updated_at, deleted_at
 FROM tasks
 WHERE id = $1
+  AND deleted_at IS NULL
 `
 
 func (q *Queries) GetTask(ctx context.Context, id uuid.UUID) (Task, error) {
@@ -59,13 +66,15 @@ func (q *Queries) GetTask(ctx context.Context, id uuid.UUID) (Task, error) {
 		&i.Done,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.DeletedAt,
 	)
 	return i, err
 }
 
 const listTasks = `-- name: ListTasks :many
-SELECT id, title, done, created_at, updated_at
+SELECT id, title, done, created_at, updated_at, deleted_at
 FROM tasks
+WHERE deleted_at IS NULL
 ORDER BY created_at DESC, id DESC
 LIMIT $1
 `
@@ -85,6 +94,7 @@ func (q *Queries) ListTasks(ctx context.Context, limit int32) ([]Task, error) {
 			&i.Done,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.DeletedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -97,9 +107,10 @@ func (q *Queries) ListTasks(ctx context.Context, limit int32) ([]Task, error) {
 }
 
 const listTasksAfter = `-- name: ListTasksAfter :many
-SELECT id, title, done, created_at, updated_at
+SELECT id, title, done, created_at, updated_at, deleted_at
 FROM tasks
 WHERE (created_at, id) < ($1::timestamptz, $2::uuid)
+  AND deleted_at IS NULL
 ORDER BY created_at DESC, id DESC
 LIMIT $3
 `
@@ -126,6 +137,7 @@ func (q *Queries) ListTasksAfter(ctx context.Context, arg ListTasksAfterParams) 
 			&i.Done,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.DeletedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -139,11 +151,14 @@ func (q *Queries) ListTasksAfter(ctx context.Context, arg ListTasksAfterParams) 
 
 const purgeDoneTasks = `-- name: PurgeDoneTasks :execrows
 DELETE FROM tasks
-WHERE done
-  AND updated_at < now() - $1::bigint * interval '1 day'
+WHERE deleted_at < now() - $1::bigint * interval '1 day'
+   OR (deleted_at IS NULL
+       AND done
+       AND updated_at < now() - $1::bigint * interval '1 day')
 `
 
-// Deletes tasks marked done whose last change is more than older_than_days ago.
+// Removes for good the tasks deleted more than older_than_days ago, and the live tasks marked done
+// whose last change is more than older_than_days ago.
 func (q *Queries) PurgeDoneTasks(ctx context.Context, olderThanDays int64) (int64, error) {
 	result, err := q.db.Exec(ctx, purgeDoneTasks, olderThanDays)
 	if err != nil {
@@ -152,13 +167,39 @@ func (q *Queries) PurgeDoneTasks(ctx context.Context, olderThanDays int64) (int6
 	return result.RowsAffected(), nil
 }
 
+const restoreTask = `-- name: RestoreTask :one
+UPDATE tasks
+SET deleted_at = NULL,
+    updated_at = now()
+WHERE id = $1
+  AND deleted_at IS NOT NULL
+RETURNING id, title, done, created_at, updated_at, deleted_at
+`
+
+// RestoreTask brings back a deleted task, changed now: the purge ages a done task by its last
+// change, so it doesn't remove one the moment it's restored.
+func (q *Queries) RestoreTask(ctx context.Context, id uuid.UUID) (Task, error) {
+	row := q.db.QueryRow(ctx, restoreTask, id)
+	var i Task
+	err := row.Scan(
+		&i.ID,
+		&i.Title,
+		&i.Done,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeletedAt,
+	)
+	return i, err
+}
+
 const updateTask = `-- name: UpdateTask :one
 UPDATE tasks
 SET title = COALESCE($1, title),
     done = COALESCE($2, done),
     updated_at = now()
 WHERE id = $3
-RETURNING id, title, done, created_at, updated_at
+  AND deleted_at IS NULL
+RETURNING id, title, done, created_at, updated_at, deleted_at
 `
 
 type UpdateTaskParams struct {
@@ -177,6 +218,7 @@ func (q *Queries) UpdateTask(ctx context.Context, arg UpdateTaskParams) (Task, e
 		&i.Done,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.DeletedAt,
 	)
 	return i, err
 }

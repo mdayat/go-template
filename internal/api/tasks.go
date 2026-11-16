@@ -33,6 +33,7 @@ func (tr taskRoutes) mount(r chi.Router) {
 	r.Get("/tasks/{id}", Handle(tr.get))
 	r.Patch("/tasks/{id}", Handle(tr.update))
 	r.Delete("/tasks/{id}", Handle(tr.delete))
+	r.Post("/tasks/{id}/restore", Handle(tr.restore))
 	// remove:worker
 	r.Post("/task-purges", Handle(tr.purge))
 	// remove:end
@@ -159,8 +160,24 @@ func (tr taskRoutes) delete(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
+// restore undoes a delete. It takes no body; restoring a task that isn't deleted returns it as it
+// is, so a client can safely send it again.
+func (tr taskRoutes) restore(w http.ResponseWriter, r *http.Request) error {
+	id, err := taskID(r)
+	if err != nil {
+		return err
+	}
+	t, err := tr.tasks.Restore(r.Context(), id)
+	if err != nil {
+		return err
+	}
+	writeJSON(w, http.StatusOK, "application/json", toTaskResponse(t))
+	return nil
+}
+
 // remove:worker
-// purge queues a job that deletes the tasks marked done more than older_than_days ago. It only
+// purge queues a job that removes for good the tasks deleted, or marked done, more than
+// older_than_days ago. It only
 // queues: an endpoint that also wrote rows could save them and then fail to queue the job.
 func (tr taskRoutes) purge(w http.ResponseWriter, r *http.Request) error {
 	var req purgeTasksRequest

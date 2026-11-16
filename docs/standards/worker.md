@@ -11,8 +11,8 @@ and a timetable (`queue.Schedule`). `internal/queue/valkey` implements them with
 `cmd/` picks it (lint: depguard). Moving to another queue is a new implementation and a few lines
 in `cmd/`, not edits across the features.
 
-The example: `tasks:purge_done` deletes tasks marked done long ago. The worker's scheduler queues
-it every day at midnight UTC.
+The example: `tasks:purge_done` removes for good the tasks deleted or marked done long ago. The
+worker's scheduler queues it every day at midnight UTC.
 <!-- remove:api -->
 `POST /task-purges` queues it on demand.
 <!-- remove:end -->

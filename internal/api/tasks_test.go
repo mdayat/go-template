@@ -31,7 +31,7 @@ func seedTask(t *testing.T, pool *pgxpool.Pool, title string, createdAfter time.
 	t.Helper()
 	rows, err := pool.Query(t.Context(),
 		`INSERT INTO tasks (title, created_at, updated_at) VALUES ($1, $2, $2)
-		 RETURNING id, title, done, created_at, updated_at`, title, seedTime.Add(createdAfter))
+		 RETURNING id, title, done, created_at, updated_at, deleted_at`, title, seedTime.Add(createdAfter))
 	if err != nil {
 		t.Fatalf("seed task: %v", err)
 	}
@@ -42,10 +42,25 @@ func seedTask(t *testing.T, pool *pgxpool.Pool, title string, createdAfter time.
 	return row
 }
 
-// tasksInDB returns every task in the database, by title.
+// markDeleted deletes task straight in the database and returns it as stored.
+func markDeleted(t *testing.T, pool *pgxpool.Pool, task db.Task) db.Task {
+	t.Helper()
+	rows, err := pool.Query(t.Context(),
+		"UPDATE tasks SET deleted_at = now() WHERE id = $1 RETURNING id, title, done, created_at, updated_at, deleted_at", task.ID)
+	if err != nil {
+		t.Fatalf("mark task deleted: %v", err)
+	}
+	row, err := pgx.CollectExactlyOneRow(rows, pgx.RowToStructByPos[db.Task])
+	if err != nil {
+		t.Fatalf("mark task deleted: %v", err)
+	}
+	return row
+}
+
+// tasksInDB returns every task in the database, deleted ones too, by title, then oldest first.
 func tasksInDB(t *testing.T, pool *pgxpool.Pool) []db.Task {
 	t.Helper()
-	rows, err := pool.Query(t.Context(), "SELECT id, title, done, created_at, updated_at FROM tasks ORDER BY title")
+	rows, err := pool.Query(t.Context(), "SELECT id, title, done, created_at, updated_at, deleted_at FROM tasks ORDER BY title, created_at")
 	if err != nil {
 		t.Fatalf("read tasks: %v", err)
 	}
@@ -413,8 +428,79 @@ func TestDeleteTask(t *testing.T) {
 	if rec.Code != http.StatusNoContent || rec.Body.Len() != 0 {
 		t.Errorf("DELETE /tasks/{id} = %d %q, want 204 with no body", rec.Code, rec.Body)
 	}
-	if diff := cmp.Diff([]db.Task{kept}, tasksInDB(t, pool)); diff != "" {
+	// The row stays, marked deleted; the task is gone for the API.
+	got := tasksInDB(t, pool)
+	if len(got) != 2 || got[1].ID != doomed.ID || got[1].DeletedAt == nil {
+		t.Fatalf("tasks in database after DELETE = %+v, want %q kept and marked deleted", got, doomed.Title)
+	}
+	doomed.DeletedAt = got[1].DeletedAt
+	if diff := cmp.Diff(sortedByTitle(doomed, kept), got); diff != "" {
 		t.Errorf("tasks in database after DELETE mismatch (-want +got):\n%s", diff)
+	}
+	rec = send(t, router, http.MethodGet, "/tasks/"+doomed.ID.String(), "")
+	if want := (problemReply{Status: http.StatusNotFound, Detail: "task not found"}); !cmp.Equal(want, readProblem(t, rec)) {
+		t.Errorf("GET /tasks/{id} after DELETE = %d %q, want 404", rec.Code, rec.Body)
+	}
+}
+
+func TestRestoreTask(t *testing.T) {
+	t.Parallel()
+	router, pool := testAPI(t)
+	task := seedTask(t, pool, "write docs", 0)
+	markDeleted(t, pool, task)
+
+	rec := send(t, router, http.MethodPost, "/tasks/"+task.ID.String()+"/restore", "")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /tasks/{id}/restore status = %d, want 200; body %s", rec.Code, rec.Body)
+	}
+	var got taskResponse
+	decodeReply(t, rec, &got)
+	// Restoring is a change: only updated_at moves.
+	rows := tasksInDB(t, pool)
+	if len(rows) != 1 || !rows[0].UpdatedAt.After(task.UpdatedAt) {
+		t.Fatalf("tasks in database after restore = %+v, want the task with a later updated_at", rows)
+	}
+	task.UpdatedAt = rows[0].UpdatedAt
+	if diff := cmp.Diff(asReply(task), got); diff != "" {
+		t.Errorf("POST /tasks/{id}/restore reply mismatch (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff([]db.Task{task}, rows); diff != "" {
+		t.Errorf("tasks in database after restore mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestRestoreTaskRejects(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		unknown bool // restore a task that doesn't exist
+		want    problemReply
+	}{
+		{"unknown task", true, problemReply{Status: http.StatusNotFound, Detail: "task not found"}},
+		{"title taken by a live task since", false, problemReply{Status: http.StatusConflict, Detail: "a task with this title already exists"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			router, pool := testAPI(t)
+			deleted := markDeleted(t, pool, seedTask(t, pool, "write docs", 0))
+			live := seedTask(t, pool, "write docs", time.Minute)
+			id := deleted.ID
+			if tt.unknown {
+				id = uuid.New()
+			}
+
+			rec := send(t, router, http.MethodPost, "/tasks/"+id.String()+"/restore", "")
+
+			if diff := cmp.Diff(tt.want, readProblem(t, rec)); diff != "" {
+				t.Errorf("POST /tasks/%s/restore reply mismatch (-want +got):\n%s", id, diff)
+			}
+			if diff := cmp.Diff([]db.Task{deleted, live}, tasksInDB(t, pool)); diff != "" {
+				t.Errorf("tasks in database mismatch (-want +got):\n%s", diff)
+			}
+		})
 	}
 }
 

@@ -8,8 +8,8 @@ a call that timed out on our side may still have worked on theirs.
 The example is `internal/webhook`, which POSTs events to a URL another system gave us, with its
 tests; it stays whichever programs a project keeps.
 <!-- remove:worker -->
-The worker's purge job uses it: after deleting old done tasks, it reports to `PURGE_WEBHOOK_URL`
-(optional).
+The worker's purge job uses it: after removing old deleted and done tasks, it reports to
+`PURGE_WEBHOOK_URL` (optional).
 <!-- remove:end -->
 
 ## Behind an interface, passed in from `cmd/`
@@ -96,8 +96,8 @@ call that timed out may have worked on the other side. So:
 
 <!-- remove:worker -->
 The worker's purge does all three. It deletes by a condition, so a second run deletes nothing. It
-reports "done tasks older than 30 days are gone", not how many it deleted: after a failed report the
-job runs again, deletes nothing, and a count would say 0. Its key is the job's ID
+reports "tasks deleted or done over 30 days ago are gone", not how many it deleted: after a
+failed report the job runs again, deletes nothing, and a count would say 0. Its key is the job's ID
 (`queue.RunFrom(ctx)`), the same on every try.
 
 <!-- remove:end -->

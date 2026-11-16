@@ -141,8 +141,9 @@ do it in one go with your first table:
      `taskJobs{...}.mount(mux)` line in `NewMux`, and `taskSchedules` in `Schedules`. Drop the purge webhook from `cmd/worker` (`purgeReports`, and
      `PURGE_WEBHOOK_URL` in `settings.go` and `.example.env`).
    <!-- remove:end -->
-2. In `db/schema.sql`, replace the `tasks` table and index with your own table; put its queries in
-   `db/queries/<feature>.sql`.
+2. In `db/schema.sql`, replace the `tasks` table and indexes with your own table; put its queries in
+   `db/queries/<feature>.sql`. In `sqlc.yaml`, replace `tasks` with your table in the soft-delete
+   rule's list (or empty the list if nothing is soft deleted).
 3. Regenerate and check:
 
    ```sh

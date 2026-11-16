@@ -15,7 +15,8 @@ import (
 	"github.com/mdayat/go-template/internal/task"
 )
 
-// purgeAfterDays is how long a done task is kept before the daily purge deletes it.
+// purgeAfterDays is how long a deleted or done task is kept before the daily purge removes it for
+// good.
 const purgeAfterDays = 30
 
 // taskSchedules returns the tasks feature's jobs that run on a timetable.

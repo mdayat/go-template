@@ -24,8 +24,10 @@ export DATABASE_URL ?= $(shell sed -nE 's/^(export[[:space:]]+)?DATABASE_URL=//p
 fmt:
 	$(TOOL) golangci-lint fmt ./...
 
+# sqlc vet checks the queries against the rules in sqlc.yaml (deleted rows skipped).
 lint:
 	$(TOOL) golangci-lint run ./...
+	$(TOOL) sqlc vet
 
 # Tests use the compose services (TEST_* in .example.env), so they must be up.
 test: db-up

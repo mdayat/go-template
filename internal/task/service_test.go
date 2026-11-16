@@ -36,7 +36,7 @@ func seedTask(t *testing.T, pool *pgxpool.Pool, title string, done bool, changed
 	t.Helper()
 	rows, err := pool.Query(t.Context(),
 		`INSERT INTO tasks (title, done, created_at, updated_at) VALUES ($1, $2, $3, $3)
-		 RETURNING id, title, done, created_at, updated_at`, title, done, changed)
+		 RETURNING id, title, done, created_at, updated_at, deleted_at`, title, done, changed)
 	if err != nil {
 		t.Fatalf("seed task: %v", err)
 	}
@@ -51,7 +51,8 @@ func seedTask(t *testing.T, pool *pgxpool.Pool, title string, done bool, changed
 func touch(t *testing.T, pool *pgxpool.Pool, task Task, changed time.Time) Task {
 	t.Helper()
 	rows, err := pool.Query(t.Context(),
-		"UPDATE tasks SET updated_at = $2 WHERE id = $1 RETURNING id, title, done, created_at, updated_at", task.ID, changed)
+		"UPDATE tasks SET updated_at = $2 WHERE id = $1 RETURNING id, title, done, created_at, updated_at, deleted_at",
+		task.ID, changed)
 	if err != nil {
 		t.Fatalf("touch task: %v", err)
 	}
@@ -62,10 +63,32 @@ func touch(t *testing.T, pool *pgxpool.Pool, task Task, changed time.Time) Task 
 	return fromRow(row)
 }
 
-// tasksInDB returns every task in the database, by title.
+// markDeleted deletes task straight in the database, as Delete does, at deletedAt.
+func markDeleted(t *testing.T, pool *pgxpool.Pool, task Task, deletedAt time.Time) {
+	t.Helper()
+	if _, err := pool.Exec(t.Context(), "UPDATE tasks SET deleted_at = $2 WHERE id = $1", task.ID, deletedAt); err != nil {
+		t.Fatalf("mark task deleted: %v", err)
+	}
+}
+
+// deletedInDB returns the titles of the deleted tasks in the database, sorted.
+func deletedInDB(t *testing.T, pool *pgxpool.Pool) []string {
+	t.Helper()
+	rows, err := pool.Query(t.Context(), "SELECT title FROM tasks WHERE deleted_at IS NOT NULL ORDER BY title")
+	if err != nil {
+		t.Fatalf("read deleted tasks: %v", err)
+	}
+	titles, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		t.Fatalf("read deleted tasks: %v", err)
+	}
+	return titles
+}
+
+// tasksInDB returns every task in the database, deleted ones too, by title.
 func tasksInDB(t *testing.T, pool *pgxpool.Pool) []Task {
 	t.Helper()
-	rows, err := pool.Query(t.Context(), "SELECT id, title, done, created_at, updated_at FROM tasks ORDER BY title")
+	rows, err := pool.Query(t.Context(), "SELECT id, title, done, created_at, updated_at, deleted_at FROM tasks ORDER BY title")
 	if err != nil {
 		t.Fatalf("read tasks: %v", err)
 	}
@@ -357,6 +380,8 @@ func TestUpdateRejects(t *testing.T) {
 	}
 }
 
+// A deleted task stays in the database, marked deleted, and every other method treats it as not
+// found.
 func TestDelete(t *testing.T) {
 	t.Parallel()
 	s, pool := testService(t)
@@ -366,30 +391,175 @@ func TestDelete(t *testing.T) {
 	if err := s.Delete(t.Context(), doomed.ID); err != nil {
 		t.Fatalf("Delete() error = %v", err)
 	}
-	if diff := cmp.Diff([]Task{kept}, tasksInDB(t, pool)); diff != "" {
+	if diff := cmp.Diff(byTitle(doomed, kept), tasksInDB(t, pool)); diff != "" {
 		t.Errorf("tasks in database mismatch (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff([]string{"write docs"}, deletedInDB(t, pool)); diff != "" {
+		t.Errorf("deleted tasks mismatch (-want +got):\n%s", diff)
 	}
 
 	err := s.Delete(t.Context(), doomed.ID)
 	if diff := cmp.Diff(errNotFound, appErrOf(err)); diff != "" {
 		t.Errorf("second Delete() error = %v, mismatch (-want +got):\n%s", err, diff)
 	}
+	err = s.Delete(t.Context(), uuid.New())
+	if diff := cmp.Diff(errNotFound, appErrOf(err)); diff != "" {
+		t.Errorf("Delete(unknown) error = %v, mismatch (-want +got):\n%s", err, diff)
+	}
 }
 
-// Deletes only tasks that are done and last changed (not created) before the age, and a second run
-// deletes nothing more.
+func TestDeletedTaskIsHidden(t *testing.T) {
+	t.Parallel()
+	s, pool := testService(t)
+	newest := seedTask(t, pool, "newest", false, seedTime.Add(2*time.Minute))
+	deleted := seedTask(t, pool, "deleted", false, seedTime.Add(time.Minute))
+	oldest := seedTask(t, pool, "oldest", false, seedTime)
+	markDeleted(t, pool, deleted, time.Now())
+	done := true
+
+	if _, err := s.Get(t.Context(), deleted.ID); appErrOf(err) == nil || appErrOf(err).Kind != apperr.KindNotFound {
+		t.Errorf("Get(deleted) error = %v, want not found", err)
+	}
+	if _, err := s.Update(t.Context(), deleted.ID, Changes{Done: &done}); appErrOf(err) == nil || appErrOf(err).Kind != apperr.KindNotFound {
+		t.Errorf("Update(deleted) error = %v, want not found", err)
+	}
+	// One page, then one task per page: both list queries skip it.
+	first, err := s.List(t.Context(), 10, nil)
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if diff := cmp.Diff([]Task{newest, oldest}, first.Tasks); diff != "" {
+		t.Errorf("List() mismatch (-want +got):\n%s", diff)
+	}
+	second, err := s.List(t.Context(), 1, &Cursor{CreatedAt: newest.CreatedAt, ID: newest.ID})
+	if err != nil {
+		t.Fatalf("List(after newest) error = %v", err)
+	}
+	if diff := cmp.Diff([]Task{oldest}, second.Tasks); diff != "" {
+		t.Errorf("List(after newest) mismatch (-want +got):\n%s", diff)
+	}
+	if second.Next != nil {
+		t.Errorf("List(after newest).Next = %+v, want nil: only deleted tasks follow", second.Next)
+	}
+	if diff := cmp.Diff(byTitle(newest, deleted, oldest), tasksInDB(t, pool)); diff != "" {
+		t.Errorf("tasks in database mismatch (-want +got):\n%s", diff)
+	}
+}
+
+// Titles are unique among live tasks only.
+func TestDeletedTaskTitleCanBeReused(t *testing.T) {
+	t.Parallel()
+	s, pool := testService(t)
+	gone := seedTask(t, pool, "write docs", false, seedTime)
+	markDeleted(t, pool, gone, time.Now())
+	other := seedTask(t, pool, "other", false, seedTime)
+	title := "write docs"
+
+	if _, err := s.Create(t.Context(), title); err != nil {
+		t.Errorf("Create(deleted task's title) error = %v", err)
+	}
+	if err := s.Delete(t.Context(), other.ID); err != nil {
+		t.Fatalf("Delete() error = %v", err)
+	}
+	// Two deleted tasks may share a title too.
+	if _, err := s.Create(t.Context(), "other"); err != nil {
+		t.Errorf("Create(\"other\") error = %v", err)
+	}
+	if diff := cmp.Diff([]string{"other", "write docs"}, deletedInDB(t, pool)); diff != "" {
+		t.Errorf("deleted tasks mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestRestore(t *testing.T) {
+	t.Parallel()
+	s, pool := testService(t)
+	task := seedTask(t, pool, "write docs", true, seedTime)
+	markDeleted(t, pool, task, time.Now())
+
+	got, err := s.Restore(t.Context(), task.ID)
+	if err != nil {
+		t.Fatalf("Restore() error = %v", err)
+	}
+	// Restoring is a change, so the purge counts the task's age from now.
+	if !got.UpdatedAt.After(task.UpdatedAt) {
+		t.Errorf("Restore().UpdatedAt = %s, want later than %s", got.UpdatedAt, task.UpdatedAt)
+	}
+	want := task
+	want.UpdatedAt = got.UpdatedAt
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("Restore() mismatch (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff([]Task{want}, tasksInDB(t, pool)); diff != "" {
+		t.Errorf("tasks in database mismatch (-want +got):\n%s", diff)
+	}
+	if got := deletedInDB(t, pool); len(got) != 0 {
+		t.Errorf("deleted tasks = %q, want none", got)
+	}
+
+	// A second restore finds it live and returns it unchanged.
+	again, err := s.Restore(t.Context(), task.ID)
+	if err != nil || !cmp.Equal(want, again) {
+		t.Errorf("second Restore() = %+v, %v; want %+v unchanged", again, err, want)
+	}
+}
+
+func TestRestoreRejects(t *testing.T) {
+	t.Parallel()
+
+	t.Run("unknown task", func(t *testing.T) {
+		t.Parallel()
+		s, _ := testService(t)
+		_, err := s.Restore(t.Context(), uuid.New())
+		if diff := cmp.Diff(errNotFound, appErrOf(err)); diff != "" {
+			t.Errorf("Restore() error = %v, mismatch (-want +got):\n%s", err, diff)
+		}
+	})
+	t.Run("title taken by a live task since", func(t *testing.T) {
+		t.Parallel()
+		s, pool := testService(t)
+		deleted := seedTask(t, pool, "write docs", false, seedTime)
+		markDeleted(t, pool, deleted, time.Now())
+		live := seedTask(t, pool, "write docs", false, seedTime)
+
+		_, err := s.Restore(t.Context(), deleted.ID)
+
+		if diff := cmp.Diff(errTitleTaken, appErrOf(err)); diff != "" {
+			t.Errorf("Restore() error = %v, mismatch (-want +got):\n%s", err, diff)
+		}
+		if diff := cmp.Diff([]string{"write docs"}, deletedInDB(t, pool)); diff != "" {
+			t.Errorf("deleted tasks mismatch (-want +got):\n%s", diff)
+		}
+		if got, err := s.Get(t.Context(), live.ID); err != nil || !cmp.Equal(live, got) {
+			t.Errorf("Get(live) = %+v, %v; want the live task unchanged", got, err)
+		}
+	})
+}
+
+// Removes the tasks deleted before the age, and the live ones done and last changed (not created)
+// before it; a second run removes nothing more.
 func TestPurgeDone(t *testing.T) {
 	t.Parallel()
 	s, pool := testService(t)
 	now := time.Now()
 	seedTask(t, pool, "done 31 days ago", true, now.Add(-31*day))
+	markDeleted(t, pool, seedTask(t, pool, "open, deleted 31 days ago", false, now.Add(-40*day)), now.Add(-31*day))
+	deletedLately := seedTask(t, pool, "done 40 days ago, deleted 29 days ago", true, now.Add(-40*day))
+	markDeleted(t, pool, deletedLately, now.Add(-29*day))
+	restored := seedTask(t, pool, "done 40 days ago, deleted and restored", true, now.Add(-40*day))
+	markDeleted(t, pool, restored, now.Add(-31*day))
+	restored, err := s.Restore(t.Context(), restored.ID)
+	if err != nil {
+		t.Fatalf("Restore() error = %v", err)
+	}
 	keep := byTitle(
 		seedTask(t, pool, "done 29 days ago", true, now.Add(-29*day)),
 		seedTask(t, pool, "open 40 days", false, now.Add(-40*day)),
 		touch(t, pool, seedTask(t, pool, "created 40 days ago, done 29 days ago", true, now.Add(-40*day)), now.Add(-29*day)),
+		deletedLately,
+		restored,
 	)
 
-	for run, want := range []int64{1, 0} {
+	for run, want := range []int64{2, 0} {
 		deleted, err := s.PurgeDone(t.Context(), 30)
 		if err != nil {
 			t.Fatalf("run %d: PurgeDone(30) error = %v", run+1, err)
