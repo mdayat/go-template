@@ -21,6 +21,10 @@ type Enqueuer struct {
 	client *asynq.Client
 }
 
+// Fails the build here, not only where cmd/ passes an Enqueuer in, if it stops implementing the
+// interface.
+var _ queue.Enqueuer = (*Enqueuer)(nil)
+
 // NewEnqueuer returns an Enqueuer that queues jobs on client. It doesn't close client.
 func NewEnqueuer(client redis.UniversalClient) *Enqueuer {
 	return &Enqueuer{client: asynq.NewClientFromRedisClient(client)}

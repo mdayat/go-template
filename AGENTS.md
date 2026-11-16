@@ -143,6 +143,10 @@ refuses them outside `internal/queue/valkey`, `internal/startup` and `internal/t
 
 **Style** ([code-style.md](docs/standards/code-style.md))
 - Return early; no named results; `ctx` first; no package-level mutable state, no `init`.
-- Accept interfaces where you use them, return concrete types.
+- Accept interfaces where you use them, return concrete types. Something outside the process (a
+  queue, a service, a secret manager; not the database) goes behind a small interface defined
+  where it's used, built in `cmd/`, with `var _ I = (*T)(nil)` beside each implementation; no
+  interface for our own code with one implementation
+  ([code-style.md](docs/standards/code-style.md#swapping-an-implementation)).
 - Comments say why, never what or when; no history in comments.
 - No `util`/`common`/`helpers` packages.

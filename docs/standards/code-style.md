@@ -119,6 +119,44 @@ The rules for which error to return live in [errors.md](errors.md). Style only:
   `http.DefaultClient`, which have no time limit ([outside-calls.md](outside-calls.md)). — lint
   (forbidigo)
 
+## Swapping an implementation
+
+Code that depends on something outside the process (a queue, another service, a secret manager;
+the database is the exception, below) depends on a small interface instead; `cmd/` builds the
+implementation and passes it in. Changing provider is then a new implementation and one line in
+`cmd/`, and the code that uses it doesn't change.
+
+- Define the interface in the package that uses it, with only the methods it calls. Put the
+  implementation in a package of its own, named for what it does (`internal/webhook`), not for the
+  provider. — review
+- Next to each implementation, a compile-time check, `var _ queue.Enqueuer = (*Enqueuer)(nil)`,
+  where its package can import the interface's: a broken implementation then fails to build where
+  it's written, not only where `cmd/` wires it. — review
+- No interface for our own code with one implementation (`*task.Service`): tests run the real
+  one, and an interface would only let them mock our own code ([testing.md](testing.md)).
+  — review
+- None for the database either: services call sqlc's `*db.Queries`, which sqlc generates again
+  for another driver, and what's Postgres's own (its error codes) stays in `internal/postgres`
+  ([database.md](database.md)). — review
+- Stable libraries that run in the process are used directly, without an interface: zerolog, the
+  logger, everywhere. — review
+
+| Interface | Defined in | Implementations | Picked in |
+|---|---|---|---|
+| `config.Source`: where settings come from | `internal/config` | `EnvSource`; `Map`, filled from a secret manager | each program's `main.go` |
+<!-- remove:worker -->
+
+| Interface | Defined in | Implementations | Picked in |
+|---|---|---|---|
+| `queue.Enqueuer` queues a job; handlers on a `queue.Mux` run it | `internal/queue` | `internal/queue/valkey` (`Enqueuer`; `Server` and `Scheduler` run a `Mux` and `Schedule`s), on asynq | each program that queues or runs jobs |
+| `worker.EventSender`: tells another system about an event | `internal/worker` | `webhook.HTTPSender`, `webhook.Discard` | `cmd/worker` |
+<!-- remove:end -->
+
+These are design patterns, and their names help when reading or adding one
+([examples in Go](https://refactoring.guru/design-patterns/go)): each implementation is a
+**strategy**; one that wraps a library behind our interface is an **adapter**; `webhook.Discard`,
+which does nothing, is a **null object**; middleware is a **decorator**.
+
 ## Other pages
 
 These have their own pages: [database.md](database.md), [testing.md](testing.md),

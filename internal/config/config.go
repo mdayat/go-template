@@ -63,6 +63,13 @@ func (m Map) Lookup(key string) (string, bool) {
 	return v, ok
 }
 
+// Fail the build here, not only where a program passes a source in, if one stops implementing
+// Source.
+var (
+	_ Source = EnvSource{}
+	_ Source = Map(nil)
+)
+
 // Reader reads settings from its sources in order: the first source with a non-empty value wins,
 // so an empty value falls through to the next source, then to the default. It collects every
 // problem instead of stopping at the first, so a bad deploy shows them all at once: check Err after
