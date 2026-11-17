@@ -8,9 +8,15 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 	"go.opentelemetry.io/otel/metric/noop"
 	tracenoop "go.opentelemetry.io/otel/trace/noop"
+
+	"github.com/mdayat/go-template/internal/db"
+	"github.com/mdayat/go-template/internal/queue/valkey"
+	"github.com/mdayat/go-template/internal/testdb"
+	"github.com/mdayat/go-template/internal/testredis"
 )
 
 func TestHealthzAnswersGetAndHead(t *testing.T) {
@@ -45,5 +51,65 @@ func TestServerErrorLogWritesJSONErrorLines(t *testing.T) {
 	}
 	if diff := cmp.Diff(want, got); diff != "" {
 		t.Errorf("log line mismatch (-want +got):\n%s", diff)
+	}
+}
+
+// Under each client's prefix, a request refused before its handler (here a 401) keeps its route in
+// logs, metrics and traces, not just the prefix; paths and methods no route has get a 404 or 405
+// without a sign-in, as anywhere else, labelled with the prefix (/web/*); GET routes answer HEAD.
+func TestClientPrefixes(t *testing.T) {
+	t.Parallel()
+	pool := testdb.New(t)
+	authn, issuer := testAuthenticator(t)
+	var logs bytes.Buffer
+	router := NewRouter(zerolog.New(&logs), noop.NewMeterProvider(), tracenoop.NewTracerProvider(),
+		NewServices(
+			db.New(pool),
+			// remove:worker
+			valkey.NewEnqueuer(testredis.New(t), tracenoop.NewTracerProvider()),
+			// remove:end
+		), authn, Limits{})
+	token := issuer.Token(testSubject)
+
+	tests := []struct {
+		method, target string
+		signedIn       bool
+		wantStatus     int
+		wantRoute      string
+		wantAllow      string
+	}{
+		{http.MethodGet, "/web/tasks/" + uuid.NewString(), false, 401, "/web/tasks/{id}", ""},
+		{http.MethodGet, "/mobile/v1/tasks", false, 401, "/mobile/v1/tasks", ""},
+		// remove:worker
+		{http.MethodGet, "/admin/deleted-row-purges", false, 405, "/admin/*", "POST"},
+		// remove:end
+		{http.MethodGet, "/mobile/v1/nowhere", false, 404, "/mobile/v1/*", ""},
+		{http.MethodGet, "/admin/nowhere", true, 404, "/admin/*", ""},
+		{http.MethodGet, "/nowhere", false, 404, "", ""},
+		{http.MethodOptions, "/web/tasks", false, 405, "/web/*", "GET, HEAD, POST"},
+		{http.MethodDelete, "/mobile/v1/tasks", false, 405, "/mobile/v1/*", "GET, HEAD, POST"},
+		{http.MethodHead, "/web/tasks", true, 200, "/web/tasks", ""},
+	}
+	for _, tt := range tests {
+		logs.Reset()
+		req := httptest.NewRequestWithContext(t.Context(), tt.method, tt.target, nil)
+		if tt.signedIn {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+
+		var line struct {
+			HTTP struct {
+				Route string `json:"route"`
+			} `json:"http"`
+		}
+		if err := json.Unmarshal(logs.Bytes(), &line); err != nil {
+			t.Fatalf("%s %s: log line %q: %v", tt.method, tt.target, logs.String(), err)
+		}
+		if rec.Code != tt.wantStatus || line.HTTP.Route != tt.wantRoute || rec.Header().Get("Allow") != tt.wantAllow {
+			t.Errorf("%s %s = %d, route %q, Allow %q; want %d, %q, %q", tt.method, tt.target,
+				rec.Code, line.HTTP.Route, rec.Header().Get("Allow"), tt.wantStatus, tt.wantRoute, tt.wantAllow)
+		}
 	}
 }

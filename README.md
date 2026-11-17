@@ -29,7 +29,7 @@ jobs. Keep both, one or neither: see [Choose what you need](#choose-what-you-nee
 | `internal/testdb` | a fresh, migrated Postgres database per test |
 | `internal/config` | reads settings from the environment and `.env` (or a secret manager you add), all problems reported at once; each program lists its own in `cmd/<name>/settings.go` |
 | `db/` | `schema.sql` (edit this), migrations written by [Atlas](https://atlasgo.io), queries |
-| `docs/standards/` | the rules, with reasons: [code style](docs/standards/code-style.md), [errors](docs/standards/errors.md), [logging](docs/standards/logging.md), [metrics](docs/standards/metrics.md), [traces](docs/standards/tracing.md), [testing](docs/standards/testing.md), [database](docs/standards/database.md), [outside services](docs/standards/outside-calls.md) |
+| `docs/standards/` | the rules, with reasons: [where code goes](docs/standards/structure.md), [code style](docs/standards/code-style.md), [errors](docs/standards/errors.md), [logging](docs/standards/logging.md), [metrics](docs/standards/metrics.md), [traces](docs/standards/tracing.md), [testing](docs/standards/testing.md), [database](docs/standards/database.md), [outside services](docs/standards/outside-calls.md) |
 | `AGENTS.md` | the same rules in short, for AI coding tools (`CLAUDE.md` loads it) |
 | `tools/go.mod` | pinned versions of golangci-lint, sqlc and govulncheck, kept out of the app's `go.mod` |
 | `Dockerfile` | each program's image, and a `migrate` image that applies migrations |
@@ -42,7 +42,7 @@ jobs. Keep both, one or neither: see [Choose what you need](#choose-what-you-nee
 | Path | What |
 |---|---|
 | `cmd/api` | the HTTP server: settings, Postgres pool, timeouts, clean shutdown on SIGTERM |
-| `internal/api` | routes, one JSON log line per request, [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) error replies, JSON body reading, sign-in and [rate limits](docs/standards/http-api.md#rate-limits) on every route but the health check |
+| `internal/api` | routes per client (`mobile/` at `/mobile/v1`, `web/` at `/web`, `admin/` at `/admin`; helpers they share in `handler/`), one JSON log line per request, [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) error replies, JSON body reading, sign-in and [rate limits](docs/standards/http-api.md#rate-limits) on every route but the health check |
 | `internal/auth` | who signed in, as a provider proved it; `internal/auth/jwks` checks JWTs against the issuer's published keys (Firebase, Auth0, Cognito, Keycloak, Supabase; see [signing in](docs/standards/http-api.md#signing-in)) |
 | `internal/ratelimit` | counting requests for the rate limits: in Valkey (`internal/ratelimit/valkey`), shared by every copy of the API, or in memory |
 | `internal/authtest`, `scripts/devtoken` | a stand-in sign-in provider: for tests, and for local runs (`make dev-token`) |
@@ -175,9 +175,11 @@ tests), then remove tasks, in one go with your first table:
    ```
 
    <!-- remove:api -->
-   - The API's part: `rm internal/api/tasks.go internal/api/tasks_test.go`. Replace tasks with your
-     feature in `internal/api/router.go`: the `Tasks` field of `api.Services`, its line in
-     `NewServices`, and the `taskRoutes{...}.mount(router)` line.
+   - The API's part: `rm internal/api/mobile/tasks.go internal/api/web/tasks.go
+     internal/api/tasks_test.go`. Replace tasks with your feature in `internal/api/router.go`: the
+     `Tasks` field of `api.Services`, its line in `NewServices`, and the `mobile.Tasks{...}` and
+     `web.Tasks{...}` lines in `NewRouter`. Keep `internal/api/handler` (paging and path IDs
+     included): your feature's handlers use it.
    <!-- remove:end -->
    <!-- remove:worker -->
    - The worker's part: replace tasks with your feature in `internal/worker/worker.go` (the `Tasks`
@@ -196,8 +198,8 @@ tests), then remove tasks, in one go with your first table:
    make fmt lint test check-generated
    ```
 
-   `make lint` then reports any shared helper no feature uses any more as `unused`: delete those,
-   and run it again.
+   `make lint` then reports any unexported shared helper no feature uses any more as `unused`:
+   delete those, and run it again.
 
 <!-- remove:template -->
 ## Choose what you need

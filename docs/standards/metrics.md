@@ -17,8 +17,8 @@ don't overwrite each other's numbers).
 <!-- remove:api -->
 - **HTTP requests** (API; [otelhttp](https://pkg.go.dev/go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp),
   `internal/api/telemetry.go`): `http.server.request.duration` (seconds) by `http.route` (the pattern,
-  `/tasks/{id}`), method and status; its count is the number of requests, so 401s, 404s and 429s
-  show too, a client that hung up before the reply as 499, and a reply a panic cut off midway
+  `/web/tasks/{id}`; a path no route matches has its client's prefix, `/web/*`), method and
+  status; its count is the number of requests, so 401s, 404s and 429s show too, a client that hung up before the reply as 499, and a reply a panic cut off midway
   with `error.type` `aborted`. The health check isn't recorded, nor otelhttp's body-size histograms
   (dropped in `internal/telemetry`).
 <!-- remove:end -->

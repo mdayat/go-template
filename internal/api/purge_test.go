@@ -12,6 +12,7 @@ import (
 	"go.opentelemetry.io/otel/metric/noop"
 	tracenoop "go.opentelemetry.io/otel/trace/noop"
 
+	"github.com/mdayat/go-template/internal/api/handler"
 	"github.com/mdayat/go-template/internal/db"
 	"github.com/mdayat/go-template/internal/jobs"
 	"github.com/mdayat/go-template/internal/queue/valkey"
@@ -27,12 +28,14 @@ func TestPurgeDeletedRowsQueuesAJob(t *testing.T) {
 	router, pool := testAPI(t)
 	testUser(t, pool, true)
 
-	rec := send(t, router, http.MethodPost, "/deleted-row-purges", `{"older_than_days":45}`)
+	rec := send(t, router, http.MethodPost, "/admin/deleted-row-purges", `{"older_than_days":45}`)
 
 	if rec.Code != http.StatusAccepted {
-		t.Fatalf("POST /deleted-row-purges status = %d, want 202; body %s", rec.Code, rec.Body)
+		t.Fatalf("POST /admin/deleted-row-purges status = %d, want 202; body %s", rec.Code, rec.Body)
 	}
-	var reply jobResponse
+	var reply struct {
+		JobID string `json:"job_id"`
+	}
 	decodeReply(t, rec, &reply)
 	job := testqueue.Take(t, testredis.New(t), jobs.Queue, reply.JobID)
 	if job.Type != jobs.TypePurgeDeletedRows || job.Timeout != 5*time.Minute || job.MaxRetry != 5 {
@@ -50,18 +53,18 @@ func TestPurgeDeletedRowsQueuesAJob(t *testing.T) {
 
 func TestPurgeDeletedRowsRejects(t *testing.T) {
 	t.Parallel()
-	outOfRange := []fieldProblem{{Field: "older_than_days", Rule: "range", Message: "must be from 1 to 3650"}}
+	outOfRange := []handler.FieldProblem{{Field: "older_than_days", Rule: "range", Message: "must be from 1 to 3650"}}
 
 	tests := []struct {
 		name       string
 		body       string
 		wantStatus int
 		wantDetail string
-		wantErrors []fieldProblem
+		wantErrors []handler.FieldProblem
 	}{
 		{
 			"no age", `{}`, 422, "request body is invalid",
-			[]fieldProblem{{Field: "older_than_days", Rule: "required", Message: "is required"}},
+			[]handler.FieldProblem{{Field: "older_than_days", Rule: "required", Message: "is required"}},
 		},
 		{"zero days", `{"older_than_days":0}`, 422, "the age is out of range", outOfRange},
 	}
@@ -71,11 +74,11 @@ func TestPurgeDeletedRowsRejects(t *testing.T) {
 			router, pool := testAPI(t)
 			testUser(t, pool, true)
 
-			rec := send(t, router, http.MethodPost, "/deleted-row-purges", tt.body)
+			rec := send(t, router, http.MethodPost, "/admin/deleted-row-purges", tt.body)
 
 			want := problemReply{Status: tt.wantStatus, Detail: tt.wantDetail, Errors: tt.wantErrors}
 			if diff := cmp.Diff(want, readProblem(t, rec)); diff != "" {
-				t.Errorf("POST /deleted-row-purges reply mismatch (-want +got):\n%s", diff)
+				t.Errorf("POST /admin/deleted-row-purges reply mismatch (-want +got):\n%s", diff)
 			}
 		})
 	}
@@ -93,25 +96,25 @@ func TestPurgeDeletedRowsQueueDownIs500(t *testing.T) {
 	router := signedIn(NewRouter(zerolog.Nop(), noop.NewMeterProvider(), tracenoop.NewTracerProvider(), NewServices(db.New(pool), valkey.NewEnqueuer(down, tracenoop.NewTracerProvider())), authn, Limits{}),
 		issuer.Token(testSubject))
 
-	rec := send(t, router, http.MethodPost, "/deleted-row-purges", `{"older_than_days":30}`)
+	rec := send(t, router, http.MethodPost, "/admin/deleted-row-purges", `{"older_than_days":30}`)
 
-	want := problemReply{Status: http.StatusInternalServerError, Detail: internalErrorDetail}
+	want := problemReply{Status: http.StatusInternalServerError, Detail: handler.InternalErrorDetail}
 	if diff := cmp.Diff(want, readProblem(t, rec)); diff != "" {
-		t.Errorf("POST /deleted-row-purges reply mismatch (-want +got):\n%s", diff)
+		t.Errorf("POST /admin/deleted-row-purges reply mismatch (-want +got):\n%s", diff)
 	}
 }
 
-// Purging removes every user's deleted rows for good, so only an admin may; anyone else is told
-// so (403: the endpoint is no secret).
+// Purging removes every user's deleted rows for good, so only an admin may (the /admin group's
+// check, admin.RequireAdmin); anyone else gets a 403.
 func TestPurgeDeletedRowsIsForAdmins(t *testing.T) {
 	t.Parallel()
 	router, pool := testAPI(t)
 	testUser(t, pool, false)
 
-	rec := send(t, router, http.MethodPost, "/deleted-row-purges", `{"older_than_days":30}`)
+	rec := send(t, router, http.MethodPost, "/admin/deleted-row-purges", `{"older_than_days":30}`)
 
-	want := problemReply{Status: http.StatusForbidden, Detail: "only admins may purge deleted rows"}
+	want := problemReply{Status: http.StatusForbidden, Detail: "only admins may use this"}
 	if diff := cmp.Diff(want, readProblem(t, rec)); diff != "" {
-		t.Errorf("POST /deleted-row-purges reply mismatch (-want +got):\n%s", diff)
+		t.Errorf("POST /admin/deleted-row-purges reply mismatch (-want +got):\n%s", diff)
 	}
 }

@@ -52,7 +52,7 @@ type request struct {
 
 func (rq request) send(t *testing.T, router http.Handler) *httptest.ResponseRecorder {
 	t.Helper()
-	return rq.sendTo(t, router, "/tasks")
+	return rq.sendTo(t, router, "/web/tasks")
 }
 
 func (rq request) sendTo(t *testing.T, router http.Handler, target string) *httptest.ResponseRecorder {

@@ -19,7 +19,7 @@ standard library / others / this module); don't format by hand.
 - Package names are short lowercase nouns that say what's inside. Never `util`, `common`,
   `helpers`, `models`: they say nothing and collect unrelated code. — review
 - Receivers are one or two letters from the type, the same in every method: `func (s *Service)`,
-  `func (tr taskRoutes)`. — the same in every method: lint (revive `receiver-naming`); short and
+  `func (tr Tasks)`. — the same in every method: lint (revive `receiver-naming`); short and
   from the type: review
 - Don't rename an import unless two imports clash or the package name is unclear
   (`stdlog "log"` next to zerolog's `log` is fine; alone it isn't). — review

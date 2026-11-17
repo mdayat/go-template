@@ -17,6 +17,7 @@ import (
 	"go.opentelemetry.io/otel/metric/noop"
 	tracenoop "go.opentelemetry.io/otel/trace/noop"
 
+	"github.com/mdayat/go-template/internal/api/handler"
 	"github.com/mdayat/go-template/internal/apperr"
 )
 
@@ -25,7 +26,7 @@ func problemRouter(t *testing.T) (http.Handler, *bytes.Buffer) {
 	t.Helper()
 	var logs bytes.Buffer
 	router := newBaseRouter(zerolog.New(&logs), noop.NewMeterProvider(), tracenoop.NewTracerProvider(), nil)
-	routes := map[string]HandlerFunc{
+	routes := map[string]handler.Func{
 		"/bad-request": func(http.ResponseWriter, *http.Request) error {
 			return apperr.BadRequest("body must be JSON")
 		},
@@ -56,7 +57,7 @@ func problemRouter(t *testing.T) (http.Handler, *bytes.Buffer) {
 		},
 	}
 	for path, h := range routes {
-		router.Get(path, Handle(h))
+		router.Get(path, handler.Handle(h))
 	}
 	router.Post("/tasks", func(http.ResponseWriter, *http.Request) {})
 	router.Get("/tasks", func(http.ResponseWriter, *http.Request) {})
@@ -74,8 +75,8 @@ func TestErrorReplies(t *testing.T) {
 		target     string
 		clientGone bool
 		wantStatus int
-		wantReply  *problem // nil: no problem reply
-		wantBody   string   // the reply body when wantReply is nil
+		wantReply  *handler.Problem // nil: no problem reply
+		wantBody   string           // the reply body when wantReply is nil
 		wantLevel  string
 		wantLogErr string // error.message on the summary line; "" means none
 	}{
@@ -84,7 +85,7 @@ func TestErrorReplies(t *testing.T) {
 			method:     http.MethodGet,
 			target:     "/bad-request",
 			wantStatus: 400,
-			wantReply:  &problem{Type: "about:blank", Title: "Bad Request", Status: 400, Detail: "body must be JSON"},
+			wantReply:  &handler.Problem{Type: "about:blank", Title: "Bad Request", Status: 400, Detail: "body must be JSON"},
 			wantLevel:  "info",
 			wantLogErr: "body must be JSON",
 		},
@@ -93,9 +94,9 @@ func TestErrorReplies(t *testing.T) {
 			method:     http.MethodGet,
 			target:     "/invalid",
 			wantStatus: 422,
-			wantReply: &problem{
+			wantReply: &handler.Problem{
 				Type: "about:blank", Title: "Unprocessable Entity", Status: 422, Detail: "the task is invalid",
-				Errors: []fieldProblem{{Field: "name", Rule: "required", Message: "is required"}},
+				Errors: []handler.FieldProblem{{Field: "name", Rule: "required", Message: "is required"}},
 			},
 			wantLevel:  "info",
 			wantLogErr: "the task is invalid",
@@ -105,7 +106,7 @@ func TestErrorReplies(t *testing.T) {
 			method:     http.MethodGet,
 			target:     "/not-found",
 			wantStatus: 404,
-			wantReply:  &problem{Type: "about:blank", Title: "Not Found", Status: 404, Detail: "task not found"},
+			wantReply:  &handler.Problem{Type: "about:blank", Title: "Not Found", Status: 404, Detail: "task not found"},
 			wantLevel:  "info",
 			wantLogErr: "get task 42: task not found",
 		},
@@ -114,7 +115,7 @@ func TestErrorReplies(t *testing.T) {
 			method:     http.MethodGet,
 			target:     "/conflict",
 			wantStatus: 409,
-			wantReply:  &problem{Type: "about:blank", Title: "Conflict", Status: 409, Detail: "a task with this name exists"},
+			wantReply:  &handler.Problem{Type: "about:blank", Title: "Conflict", Status: 409, Detail: "a task with this name exists"},
 			wantLevel:  "info",
 			wantLogErr: "create task: a task with this name exists",
 		},
@@ -123,7 +124,7 @@ func TestErrorReplies(t *testing.T) {
 			method:     http.MethodGet,
 			target:     "/unexpected",
 			wantStatus: 500,
-			wantReply:  &problem{Type: "about:blank", Title: "Internal Server Error", Status: 500, Detail: "internal server error"},
+			wantReply:  &handler.Problem{Type: "about:blank", Title: "Internal Server Error", Status: 500, Detail: "internal server error"},
 			wantLevel:  "error",
 			wantLogErr: "query tasks: connect to db password=hunter2",
 		},
@@ -150,7 +151,7 @@ func TestErrorReplies(t *testing.T) {
 			method:     http.MethodGet,
 			target:     "/cancelled",
 			wantStatus: 500,
-			wantReply:  &problem{Type: "about:blank", Title: "Internal Server Error", Status: 500, Detail: "internal server error"},
+			wantReply:  &handler.Problem{Type: "about:blank", Title: "Internal Server Error", Status: 500, Detail: "internal server error"},
 			wantLevel:  "error",
 			wantLogErr: "list tasks: context canceled",
 		},
@@ -159,7 +160,7 @@ func TestErrorReplies(t *testing.T) {
 			method:     http.MethodGet,
 			target:     "/nope",
 			wantStatus: 404,
-			wantReply:  &problem{Type: "about:blank", Title: "Not Found", Status: 404, Detail: "no route matches this path"},
+			wantReply:  &handler.Problem{Type: "about:blank", Title: "Not Found", Status: 404, Detail: "no route matches this path"},
 			wantLevel:  "info",
 		},
 		{
@@ -167,7 +168,7 @@ func TestErrorReplies(t *testing.T) {
 			method:     http.MethodDelete,
 			target:     "/tasks",
 			wantStatus: 405,
-			wantReply:  &problem{Type: "about:blank", Title: "Method Not Allowed", Status: 405, Detail: "method not allowed on this path"},
+			wantReply:  &handler.Problem{Type: "about:blank", Title: "Method Not Allowed", Status: 405, Detail: "method not allowed on this path"},
 			wantLevel:  "info",
 		},
 	}
@@ -197,7 +198,7 @@ func TestErrorReplies(t *testing.T) {
 				if got := rec.Header().Get("Content-Type"); got != "application/problem+json" {
 					t.Errorf("Content-Type = %q, want application/problem+json", got)
 				}
-				var got problem
+				var got handler.Problem
 				if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 					t.Fatalf("reply is not JSON: %q: %v", rec.Body.String(), err)
 				}
@@ -279,7 +280,7 @@ func TestRequestOverTheTimeLimitIs503(t *testing.T) {
 	t.Parallel()
 	var logs bytes.Buffer
 	router := newBaseRouter(zerolog.New(&logs), noop.NewMeterProvider(), tracenoop.NewTracerProvider(), nil)
-	router.With(limitRequestTime(10*time.Millisecond)).Get("/slow", Handle(func(_ http.ResponseWriter, r *http.Request) error {
+	router.With(limitRequestTime(10*time.Millisecond)).Get("/slow", handler.Handle(func(_ http.ResponseWriter, r *http.Request) error {
 		<-r.Context().Done()
 		return fmt.Errorf("list tasks: %w", r.Context().Err())
 	}))
@@ -287,7 +288,7 @@ func TestRequestOverTheTimeLimitIs503(t *testing.T) {
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/slow", nil))
 
-	var got problem
+	var got handler.Problem
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatalf("reply is not JSON: %q: %v", rec.Body, err)
 	}
@@ -307,7 +308,7 @@ func TestRequestOverTheTimeLimitIs503(t *testing.T) {
 func TestErrorReplyDropsBodyHeaders(t *testing.T) {
 	t.Parallel()
 	router := newBaseRouter(zerolog.Nop(), noop.NewMeterProvider(), tracenoop.NewTracerProvider(), nil)
-	router.Get("/export", Handle(func(w http.ResponseWriter, _ *http.Request) error {
+	router.Get("/export", handler.Handle(func(w http.ResponseWriter, _ *http.Request) error {
 		// Set up for a gzipped, cacheable file download, then fail before writing it.
 		w.Header().Set("Content-Encoding", "gzip")
 		w.Header().Set("Content-Disposition", `attachment; filename="tasks.csv"`)
@@ -343,7 +344,7 @@ func TestHandleOutsideRouterLeavesSharedLoggerAlone(t *testing.T) {
 
 	// A plain mux: no logging middleware, so the request carries no logger of its own.
 	mux := http.NewServeMux()
-	mux.Handle("/x", Handle(func(http.ResponseWriter, *http.Request) error {
+	mux.Handle("/x", handler.Handle(func(http.ResponseWriter, *http.Request) error {
 		return errors.New("db down")
 	}))
 	mux.ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/x", nil))

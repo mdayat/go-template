@@ -14,6 +14,7 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/mdayat/go-template/internal/api/handler"
 	"github.com/mdayat/go-template/internal/ratelimit"
 )
 
@@ -122,7 +123,7 @@ func signedOutLimit(limit int, limiter ratelimit.Limiter) *rateLimit {
 // limitPerUser refuses a signed-in user's requests past limit a minute. Only behind authenticate.
 func limitPerUser(limit int, limiter ratelimit.Limiter) func(http.Handler) http.Handler {
 	l := newRateLimit("user", limit, limiter, func(r *http.Request) string {
-		return currentUser(r).ID.String()
+		return handler.CurrentUser(r).ID.String()
 	})
 	return func(next http.Handler) http.Handler {
 		if l == nil {
@@ -145,7 +146,7 @@ func (l *rateLimit) check(w http.ResponseWriter, r *http.Request) bool {
 	}
 	d, err := l.limiter.Allow(r.Context(), l.name+":"+l.key(r), l.limit)
 	if err != nil {
-		writeError(w, r, fmt.Errorf("rate limit per %s: %w", l.name, err))
+		handler.WriteError(w, r, fmt.Errorf("rate limit per %s: %w", l.name, err))
 		return false
 	}
 	h := w.Header()
@@ -157,9 +158,9 @@ func (l *rateLimit) check(w http.ResponseWriter, r *http.Request) bool {
 		return true
 	}
 	h.Set("Retry-After", strconv.Itoa(seconds(d.RetryAfter)))
-	writeError(w, r, fmt.Errorf("rate limit per %s reached: %w", l.name, &statusError{
-		status: http.StatusTooManyRequests,
-		detail: "too many requests; wait the seconds in Retry-After and try again",
+	handler.WriteError(w, r, fmt.Errorf("rate limit per %s reached: %w", l.name, &handler.StatusError{
+		Status: http.StatusTooManyRequests,
+		Detail: "too many requests; wait the seconds in Retry-After and try again",
 	}))
 	return false
 }

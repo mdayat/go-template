@@ -1,4 +1,8 @@
-package api
+// Package handler holds what every client's handlers share (internal/api/mobile, web, admin):
+// turning a returned error into a reply, reading request bodies, writing JSON, the signed-in user,
+// paging and path IDs. The mobile apps depend on all of it: a change here to a reply or to what a
+// request accepts must only add (docs/standards/http-api.md).
+package handler
 
 import (
 	"context"
@@ -14,52 +18,55 @@ import (
 
 	"github.com/mdayat/go-template/internal/apperr"
 	"github.com/mdayat/go-template/internal/json"
-	"github.com/mdayat/go-template/internal/user"
 )
 
-// HandlerFunc is an HTTP handler that returns its failure instead of writing it.
-type HandlerFunc func(w http.ResponseWriter, r *http.Request) error
+// Func is an HTTP handler that returns its failure instead of writing it.
+type Func func(w http.ResponseWriter, r *http.Request) error
 
 // Handle adapts h to an http.HandlerFunc. A returned error becomes an RFC 9457 reply and is attached
 // to the request's summary log line; nothing else logs it.
-func Handle(h HandlerFunc) http.HandlerFunc {
+func Handle(h Func) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if err := h(w, r); err != nil {
-			writeError(w, r, err)
+			WriteError(w, r, err)
 		}
 	}
 }
 
-// problem is an RFC 9457 "problem details" reply body. request_id and errors are extension members.
-type problem struct {
+// Problem is an RFC 9457 "problem details" reply body. request_id and errors are extension members.
+type Problem struct {
 	Type      string         `json:"type"`
 	Title     string         `json:"title"`
 	Status    int            `json:"status"`
 	Detail    string         `json:"detail,omitempty"`
 	RequestID string         `json:"request_id,omitempty"`
-	Errors    []fieldProblem `json:"errors,omitempty"`
+	Errors    []FieldProblem `json:"errors,omitempty"`
 }
 
-type fieldProblem struct {
+// FieldProblem is one field a request got wrong.
+type FieldProblem struct {
 	Field   string `json:"field"`
 	Rule    string `json:"rule"`
 	Message string `json:"message"`
 }
 
-const internalErrorDetail = "internal server error"
+// InternalErrorDetail is the detail of every 500: the error itself may hold internal details.
+const InternalErrorDetail = "internal server error"
 
-// statusError is a failure that only exists in HTTP (an oversized body, a wrong Content-Type), so it
-// isn't an apperr kind. Its detail is safe to show the caller.
-type statusError struct {
-	status int
-	detail string
+// StatusError is a failure that only exists in HTTP (an oversized body, a wrong Content-Type, a
+// rate limit), so it isn't an apperr kind. Its Detail is safe to show the caller.
+type StatusError struct {
+	Status int
+	Detail string
 }
 
-func (e *statusError) Error() string {
-	return e.detail
+func (e *StatusError) Error() string {
+	return e.Detail
 }
 
-func writeError(w http.ResponseWriter, r *http.Request, err error) {
+// WriteError replies to a failed request with err's problem (see problemFor) and attaches err to
+// the request's summary log line.
+func WriteError(w http.ResponseWriter, r *http.Request, err error) {
 	recordError(r, err)
 
 	// The client is gone (net/http cancels the context when it disconnects): nobody would read a
@@ -72,54 +79,56 @@ func writeError(w http.ResponseWriter, r *http.Request, err error) {
 		return
 	}
 	p := problemFor(err)
-	// The request's own time limit ran out (limitRequestTime): our failure, and one a client may
+	// The request's own time limit ran out (the router's limit): our failure, and one a client may
 	// retry, unlike a plain 500.
 	if errors.Is(err, context.DeadlineExceeded) && errors.Is(r.Context().Err(), context.DeadlineExceeded) {
-		p = newProblem(http.StatusServiceUnavailable, "the request took too long")
+		p = NewProblem(http.StatusServiceUnavailable, "the request took too long")
 	}
-	writeProblem(w, r, p)
+	WriteProblem(w, r, p)
 }
 
-// problemFor maps an error to its reply. Only a *statusError's or *apperr.Error's detail reaches the
+// problemFor maps an error to its reply. Only a *StatusError's or *apperr.Error's detail reaches the
 // caller; any other error is a 500 with a fixed message, since its text may hold internal details.
-func problemFor(err error) problem {
-	if statusErr, ok := errors.AsType[*statusError](err); ok {
-		return newProblem(statusErr.status, statusErr.detail)
+func problemFor(err error) Problem {
+	if statusErr, ok := errors.AsType[*StatusError](err); ok {
+		return NewProblem(statusErr.Status, statusErr.Detail)
 	}
 	appErr, ok := errors.AsType[*apperr.Error](err)
 	if !ok {
-		return newProblem(http.StatusInternalServerError, internalErrorDetail)
+		return NewProblem(http.StatusInternalServerError, InternalErrorDetail)
 	}
 
 	switch appErr.Kind {
 	case apperr.KindBadRequest:
-		return newProblem(http.StatusBadRequest, appErr.Detail)
+		return NewProblem(http.StatusBadRequest, appErr.Detail)
 	case apperr.KindInvalid:
-		p := newProblem(http.StatusUnprocessableEntity, appErr.Detail)
+		p := NewProblem(http.StatusUnprocessableEntity, appErr.Detail)
 		for _, f := range appErr.Fields {
-			p.Errors = append(p.Errors, fieldProblem(f))
+			p.Errors = append(p.Errors, FieldProblem(f))
 		}
 		return p
 	case apperr.KindNotFound:
-		return newProblem(http.StatusNotFound, appErr.Detail)
+		return NewProblem(http.StatusNotFound, appErr.Detail)
 	case apperr.KindConflict:
-		return newProblem(http.StatusConflict, appErr.Detail)
+		return NewProblem(http.StatusConflict, appErr.Detail)
 	case apperr.KindUnauthenticated:
-		return newProblem(http.StatusUnauthorized, appErr.Detail)
+		return NewProblem(http.StatusUnauthorized, appErr.Detail)
 	case apperr.KindForbidden:
-		return newProblem(http.StatusForbidden, appErr.Detail)
+		return NewProblem(http.StatusForbidden, appErr.Detail)
 	}
 	// After the switch, not as its default: with no default case the linter (exhaustive) fails until
 	// a new kind gets its own case. Only a zero or made-up Kind gets here.
-	return newProblem(http.StatusInternalServerError, internalErrorDetail)
+	return NewProblem(http.StatusInternalServerError, InternalErrorDetail)
 }
 
-func newProblem(status int, detail string) problem {
+// NewProblem is the reply for status with detail.
+func NewProblem(status int, detail string) Problem {
 	// "about:blank" means the status code says it all (RFC 9457 section 4.2.1).
-	return problem{Type: "about:blank", Title: http.StatusText(status), Status: status, Detail: detail}
+	return Problem{Type: "about:blank", Title: http.StatusText(status), Status: status, Detail: detail}
 }
 
-func writeProblem(w http.ResponseWriter, r *http.Request, p problem) {
+// WriteProblem writes p as the reply, with the request's ID.
+func WriteProblem(w http.ResponseWriter, r *http.Request, p Problem) {
 	// Drop headers describing a reply body. A handler may set them and then fail; left on the problem
 	// reply they'd misdescribe it (a gzip Content-Encoding on plain JSON breaks the client, a
 	// success's Cache-Control lets a proxy cache the error). Middleware headers like X-Request-Id stay.
@@ -132,11 +141,11 @@ func writeProblem(w http.ResponseWriter, r *http.Request, p problem) {
 	if id, ok := hlog.IDFromRequest(r); ok {
 		p.RequestID = id.String()
 	}
-	writeJSON(w, p.Status, "application/problem+json", p)
+	WriteJSON(w, p.Status, "application/problem+json", p)
 }
 
-// writeJSON writes v as the reply. All JSON replies go through here, so each gets the same headers.
-func writeJSON(w http.ResponseWriter, status int, contentType string, v any) {
+// WriteJSON writes v as the reply. All JSON replies go through here, so each gets the same headers.
+func WriteJSON(w http.ResponseWriter, status int, contentType string, v any) {
 	body, err := json.Marshal(v)
 	if err != nil {
 		// Only our own reply types reach here, and they always marshal; treat a failure as a bug.
@@ -151,10 +160,10 @@ func writeJSON(w http.ResponseWriter, status int, contentType string, v any) {
 	_, _ = w.Write(body)
 }
 
-// recordError attaches err to the request's summary log line (written by logRequests). A request
-// without its own logger (a route outside newBaseRouter) has no summary line, and zerolog.Ctx then
-// returns the shared fallback logger: changing that would stamp this error on every later line. So
-// the error gets a line of its own instead.
+// recordError attaches err to the request's summary log line (written by the router's request
+// log). A request without its own logger (a route outside the router) has no summary line, and
+// zerolog.Ctx then returns the shared fallback logger: changing that would stamp this error on
+// every later line. So the error gets a line of its own instead.
 func recordError(r *http.Request, err error) {
 	logger := zerolog.Ctx(r.Context())
 	if logger == zerolog.DefaultContextLogger {
@@ -166,34 +175,21 @@ func recordError(r *http.Request, err error) {
 	})
 }
 
-// recordUser puts who made the request on its summary log line: our user ID only, never the
-// provider's ID for them or anything else about them. A request without its own logger has no
-// summary line, so there's nothing to add to (see recordError).
-func recordUser(r *http.Request, u user.User) {
-	logger := zerolog.Ctx(r.Context())
-	if logger == zerolog.DefaultContextLogger {
-		return
-	}
-	logger.UpdateContext(func(c zerolog.Context) zerolog.Context {
-		return c.Dict("user", zerolog.Dict().Str("id", u.ID.String()))
-	})
-}
-
-// responseStarted reports whether a status has already been sent. w is logRequests' wrapper on every
-// routed request; without it, assume nothing was sent.
+// responseStarted reports whether a status has already been sent. w is the request log's wrapper on
+// every routed request; without it, assume nothing was sent.
 func responseStarted(w http.ResponseWriter) bool {
 	ww, ok := w.(middleware.WrapResponseWriter)
 	return ok && ww.Status() != 0
 }
 
-// notFound replies 404 for paths no route matches.
-func notFound(w http.ResponseWriter, r *http.Request) {
-	writeProblem(w, r, newProblem(http.StatusNotFound, "no route matches this path"))
+// NotFound replies 404 for paths no route matches.
+func NotFound(w http.ResponseWriter, r *http.Request) {
+	WriteProblem(w, r, NewProblem(http.StatusNotFound, "no route matches this path"))
 }
 
-// methodNotAllowed replies 405 with the Allow header chi's own 405 reply would set; chi adds that
+// MethodNotAllowed replies 405 with the Allow header chi's own 405 reply would set; chi adds that
 // header only in its built-in handler, so it's rebuilt here by asking the router about each method.
-func methodNotAllowed(router chi.Routes) http.HandlerFunc {
+func MethodNotAllowed(router chi.Routes) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// The path chi routed on: the raw form when the request has one (an encoded "/" as %2F), so
 		// the match below sees the same path.
@@ -206,13 +202,13 @@ func methodNotAllowed(router chi.Routes) http.HandlerFunc {
 			http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut,
 			http.MethodPatch, http.MethodDelete, http.MethodOptions,
 		} {
-			// GET routes answer HEAD too (middleware.GetHead in newBaseRouter).
+			// GET routes answer HEAD too (middleware.GetHead in the router).
 			getAnswersHead := method == http.MethodHead && slices.Contains(allowed, http.MethodGet)
 			if getAnswersHead || router.Match(chi.NewRouteContext(), method, path) {
 				allowed = append(allowed, method)
 			}
 		}
 		w.Header().Set("Allow", strings.Join(allowed, ", "))
-		writeProblem(w, r, newProblem(http.StatusMethodNotAllowed, "method not allowed on this path"))
+		WriteProblem(w, r, NewProblem(http.StatusMethodNotAllowed, "method not allowed on this path"))
 	}
 }

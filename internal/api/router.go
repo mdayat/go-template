@@ -13,33 +13,23 @@ import (
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/mdayat/go-template/internal/api/admin"
+	"github.com/mdayat/go-template/internal/api/handler"
+	"github.com/mdayat/go-template/internal/api/mobile"
+	"github.com/mdayat/go-template/internal/api/web"
 	"github.com/mdayat/go-template/internal/db"
 	"github.com/mdayat/go-template/internal/queue"
 	"github.com/mdayat/go-template/internal/task"
 	"github.com/mdayat/go-template/internal/user"
 )
 
-const (
-	healthPath = "/healthz"
-
-	// defaultPageSize is a list's page size when the request has no ?limit=.
-	defaultPageSize = 20
-)
+const healthPath = "/healthz"
 
 // RequestTimeout is how long a request's context lives. The server's WriteTimeout (cmd/api) cuts a
 // slow reply's connection but doesn't cancel its context, so without this a query stuck on a lock
 // runs on and holds its database connection. Kept below WriteTimeout (10 s) so the 503 reply still
 // reaches the client. Exported for cmd/api, whose shutdown wait must not be shorter.
 const RequestTimeout = 8 * time.Second
-
-// remove:worker
-// jobResponse is the reply of every endpoint that queues a job (202 Accepted): the job's ID, for
-// finding it in the worker's logs.
-type jobResponse struct {
-	JobID string `json:"job_id"`
-}
-
-// remove:end
 
 // Services holds what the routes call, one field per feature. A new feature adds its field here and
 // builds it in NewServices.
@@ -74,22 +64,46 @@ func NewServices(
 // NewRouter returns the API's routes, each request logged to logger, measured to meters and traced
 // to tracers. Every route but the health check needs someone signed in, as authn says, and is rate
 // limited as limits says.
+//
+// Each client has its routes under its own prefix, in its own package, so one client's replies can
+// change without touching another's (docs/standards/http-api.md): /mobile/v1 (internal/api/mobile:
+// only grows, old app versions call it for years), /web (internal/api/web: changes with the web
+// app) and /admin (internal/api/admin: admins only). All of them call the same services.
 func NewRouter(
 	logger zerolog.Logger, meters metric.MeterProvider, tracers trace.TracerProvider,
 	services Services, authn Authenticator, limits Limits,
 ) *chi.Mux {
 	router := newBaseRouter(logger, meters, tracers, limits.TrustedProxies)
-	// One decoder for every feature: the validator caches what it learns about each type.
-	decoder := newBodyDecoder()
-	router.Group(func(r chi.Router) {
-		r.Use(
-			authenticate(authn, services.Users, signedOutLimit(limits.PerIP, limits.Limiter)),
-			limitPerUser(limits.PerUser, limits.Limiter),
-		)
-		taskRoutes{tasks: services.Tasks, decoder: decoder}.mount(r)
-		// remove:worker
-		purgeRoutes{jobs: services.Jobs, decoder: decoder}.mount(r)
-		// remove:end
+	// One decoder for every client: the validator caches what it learns about each type.
+	decoder := handler.NewDecoder()
+	// The same check and counts for every client (one per-user limit across them all). In an inline
+	// group inside each prefix, so they run once chi has matched the route: a refused request (401,
+	// 429, 403) still carries its route ("/web/tasks/{id}") in logs, metrics and traces, and a path
+	// no route matches is a plain 404 that needs no sign-in, like any other.
+	signedIn := []func(http.Handler) http.Handler{
+		authenticate(authn, services.Users, signedOutLimit(limits.PerIP, limits.Limiter)),
+		limitPerUser(limits.PerUser, limits.Limiter),
+	}
+	router.Route("/mobile/v1", func(r chi.Router) {
+		r.Group(func(r chi.Router) {
+			r.Use(signedIn...)
+			mobile.Tasks{Tasks: services.Tasks, Decoder: decoder}.Mount(r)
+		})
+	})
+	router.Route("/web", func(r chi.Router) {
+		r.Group(func(r chi.Router) {
+			r.Use(signedIn...)
+			web.Tasks{Tasks: services.Tasks, Decoder: decoder}.Mount(r)
+		})
+	})
+	router.Route("/admin", func(r chi.Router) {
+		r.Group(func(r chi.Router) {
+			r.Use(signedIn...)
+			r.Use(admin.RequireAdmin)
+			// remove:worker
+			admin.Purges{Jobs: services.Jobs, Decoder: decoder}.Mount(r)
+			// remove:end
+		})
 	})
 	return router
 }
@@ -121,8 +135,8 @@ func newBaseRouter(
 	router.Get(healthPath, func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	router.NotFound(notFound)
-	router.MethodNotAllowed(methodNotAllowed(router))
+	router.NotFound(handler.NotFound)
+	router.MethodNotAllowed(handler.MethodNotAllowed(router))
 	return router
 }
 

@@ -15,6 +15,7 @@ import (
 	"go.opentelemetry.io/otel/metric/noop"
 	tracenoop "go.opentelemetry.io/otel/trace/noop"
 
+	"github.com/mdayat/go-template/internal/api/handler"
 	"github.com/mdayat/go-template/internal/auth/jwks"
 	"github.com/mdayat/go-template/internal/authtest"
 	"github.com/mdayat/go-template/internal/db"
@@ -124,7 +125,7 @@ func TestSignInWithTheDatabaseDownIs500(t *testing.T) {
 
 	rec := sendWithAuth(t, router, "/private", "Bearer "+issuer.Token("alice"))
 
-	want := problemReply{Status: http.StatusInternalServerError, Detail: internalErrorDetail}
+	want := problemReply{Status: http.StatusInternalServerError, Detail: handler.InternalErrorDetail}
 	if diff := cmp.Diff(want, readProblem(t, rec)); diff != "" {
 		t.Errorf("GET /private reply mismatch (-want +got):\n%s", diff)
 	}

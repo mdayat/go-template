@@ -164,7 +164,7 @@ func TestObserveRequestsLogTraceIDs(t *testing.T) {
 		zerolog.Ctx(r.Context()).Info().Msg("inside")
 	})
 
-	request{remoteAddr: "192.0.2.1:1234"}.send(t, router)
+	request{remoteAddr: "192.0.2.1:1234"}.sendTo(t, router, "/tasks")
 
 	span := spans.Ended()[0].SpanContext()
 	lines := strings.Split(strings.TrimSpace(logs.String()), "\n")
@@ -210,7 +210,7 @@ func TestObserveRequestsNoIDsForDroppedTraces(t *testing.T) {
 	router := newBaseRouter(zerolog.New(&logs), noop.NewMeterProvider(), dropAll, nil)
 	router.Get("/tasks", func(http.ResponseWriter, *http.Request) {})
 
-	request{remoteAddr: "192.0.2.1:1234"}.send(t, router)
+	request{remoteAddr: "192.0.2.1:1234"}.sendTo(t, router, "/tasks")
 
 	if strings.Contains(logs.String(), `"trace"`) || strings.Contains(logs.String(), `"span"`) {
 		t.Errorf("logged %s, want no trace or span ID", logs.String())
@@ -266,7 +266,7 @@ func TestObserveRequestsClientAddressBehindProxy(t *testing.T) {
 	router.Get("/tasks", func(http.ResponseWriter, *http.Request) {})
 
 	for _, xff := range []string{"203.0.113.9", "alice@example.com", "not an ip, 192.0.2.5"} {
-		request{remoteAddr: "192.0.2.1:1234", xff: xff}.send(t, router)
+		request{remoteAddr: "192.0.2.1:1234", xff: xff}.sendTo(t, router, "/tasks")
 	}
 
 	want := []string{"203.0.113.9", "192.0.2.1", "192.0.2.1"}
@@ -284,7 +284,7 @@ func TestObserveRequestsServerErrorFails(t *testing.T) {
 	router := newBaseRouter(zerolog.Nop(), noop.NewMeterProvider(), spans.Provider, nil)
 	router.Get("/tasks", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusInternalServerError) })
 
-	request{remoteAddr: "192.0.2.1:1234"}.send(t, router)
+	request{remoteAddr: "192.0.2.1:1234"}.sendTo(t, router, "/tasks")
 
 	if span := spans.Named("GET /tasks"); len(span) != 1 || span[0].Status().Code != codes.Error {
 		t.Errorf("spans = %q, want GET /tasks failed", spans.Names())

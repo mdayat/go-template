@@ -17,14 +17,17 @@ that line, and a panic its stack: there is never a second line for the same fail
 
 ```json
 {"level":"info","request_id":"dbqsuft4m06s73apk900",
- "http":{"request":{"method":"POST"},"response":{"status_code":201,"body":{"bytes":166}},"route":"/tasks"},
- "url":{"path":"/tasks"},"user_agent":{"original":"curl/8.7.1"},
+ "http":{"request":{"method":"POST"},"response":{"status_code":201,"body":{"bytes":166}},"route":"/web/tasks"},
+ "url":{"path":"/web/tasks"},"user_agent":{"original":"curl/8.7.1"},
  "client":{"ip":"192.168.65.1","port":46088},"user":{"id":"efd81794-932e-4377-bcc0-9555c784e38e"},
  "duration_ms":10.6,"message":"request completed"}
 ```
 
-- `http.route` is the route pattern (`/tasks/{id}`), so requests group by endpoint; `url.path` is
-  the actual path.
+- `user_agent.original` is what the client sent; the mobile apps send `<app>/<version>`, so the
+  lines show which app versions still call a route
+  ([http-api.md](http-api.md#clients-paths-and-versions)).
+- `http.route` is the route pattern (`/web/tasks/{id}`), so requests group by endpoint; `url.path`
+  is the actual path.
 - `request_id` is new for every request and sent back as the `X-Request-Id` header, so a user's
   bug report can be matched to its line. A client's own `X-Request-Id` is ignored: it could be
   forged.
@@ -89,7 +92,7 @@ error (a payment confirmed, a job started).
 its own (code called from elsewhere, a test). `zerolog.Ctx` then returns the shared default logger,
 and the field sticks to every later line of the whole process.
 <!-- remove:api -->
-`recordError` in `internal/api/problem.go` guards against exactly this.
+`recordError` in `internal/api/handler/handler.go` guards against exactly this.
 <!-- remove:end -->
 
 ## Startup, shutdown and libraries

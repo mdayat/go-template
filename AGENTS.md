@@ -31,15 +31,17 @@ Tests that use Valkey also read `TEST_REDIS_URL`.
 | settings | the program's `cmd/<name>/settings.go` (read through `internal/config`), its `settings_test.go`, and `.example.env` | `DATABASE_URL` |
 | anything several features use | not in one feature's files (removing that feature would break the rest): test helpers in a package's `main_test.go`, other code in a shared file | `internal/testdb` (one package every test uses) |
 
+The full rules and a new feature's checklist: [structure.md](docs/standards/structure.md).
+
 <!-- remove:api -->
 In the HTTP API:
 
 | Change | Where | Example |
 |---|---|---|
-| routes and handlers | `internal/api/<feature>.go`, mounted in `router.go` | `internal/api/tasks.go` |
+| routes and handlers, per client | `internal/api/mobile/<feature>.go` (`/mobile/v1`: only add, never change), `internal/api/web/<feature>.go` (`/web`), `internal/api/admin/<feature>.go` (`/admin`), mounted in `NewRouter` (`router.go`); each with its own request and reply types | `internal/api/mobile/tasks.go`, `internal/api/web/tasks.go` |
 | wiring a new service | a field in `api.Services` and a line in `api.NewServices` (`router.go`); the app and the tests both build services there | `Tasks` |
-| endpoint tests | `internal/api/<feature>_test.go` | `internal/api/tasks_test.go` |
-| helpers several features use | test helpers in `internal/api/main_test.go`, other code in `router.go` | `send`, `readProblem`, `defaultPageSize` |
+| endpoint tests | `internal/api/<feature>_test.go`, a subtest per client | `internal/api/tasks_test.go` |
+| helpers several features use | test helpers in `internal/api/main_test.go`, handler helpers in `internal/api/handler` | `send`, `readProblem`, `handler.DefaultPageSize` |
 
 <!-- remove:end -->
 <!-- remove:worker -->
@@ -82,17 +84,23 @@ outside `cmd/`.
 
 <!-- remove:api -->
 **HTTP** ([http-api.md](docs/standards/http-api.md))
-- Handlers are `func(w, r) error`, wrapped with `Handle`. Read JSON bodies only with
-  `tr.decoder.decode`; write replies only with `writeJSON`.
+- Handlers are `func(w, r) error`, wrapped with `handler.Handle`. Read JSON bodies only with the
+  shared `handler.Decoder`; write replies only with `handler.WriteJSON`.
+- Each client has its own package and prefix (http-api.md): `/mobile/v1` only grows (add a field
+  or route; never remove, rename or retype one; a break is `/mobile/v2`), `/web` and `/admin`
+  change with their apps. Never share a request or reply type between clients (the error body,
+  `handler.Problem`, is the one shared). Paths are plural
+  kebab-case nouns; JSON keys and query parameters snake_case.
 - `validate` tags check shape; the service checks meaning.
 - Lists: an object with a list field, cursor paging, never `null` for an empty list.
 - Every route but `/healthz` is behind `authenticate` (sign-in), which turns the provider's ID into
   our user (`internal/user`, the `users` table; `is_admin` is ours). Handlers never read tokens or a
   provider's claims; tables point at `users.id`. A provider is an `Authenticator` implementation
   picked in `cmd/api`. Endpoint tests are signed in by `testAPI`.
-- Handlers pass `currentUser(r)` to services, which decide who may do what: a user's own rows
-  only (someone else's is `NotFound`, never `Forbidden`), an admin's everyone's. `Forbidden` (403)
-  is for actions that are no secret, like an admin-only endpoint.
+- Handlers pass `handler.CurrentUser(r)` to services, which decide who may do what: a user's own
+  rows only (someone else's is `NotFound`, never `Forbidden`), an admin's everyone's. `Forbidden`
+  (403) is for actions that are no secret, like an admin-only route (under `/admin`, behind
+  `admin.RequireAdmin`).
 - Rate limits (per client IP for requests without a valid sign-in, per signed-in user) are set in
   `NewRouter` from `api.Limits`, counted through `ratelimit.Limiter` (`cmd/api` picks Valkey's).
   Never read a client's IP from a header yourself: use `middleware.GetClientIP`, which trusts

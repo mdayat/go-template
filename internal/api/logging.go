@@ -14,6 +14,8 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/hlog"
+
+	"github.com/mdayat/go-template/internal/api/handler"
 )
 
 // statusClientClosed is logged when the client hung up before any reply was written. It's nginx's
@@ -54,7 +56,8 @@ func logRequests(next http.Handler) http.Handler {
 			Dict("response", zerolog.Dict().
 				Int("status_code", status).
 				Dict("body", zerolog.Dict().Int("bytes", ww.BytesWritten())))
-		// The route pattern (/users/{id}) groups requests by endpoint; it's empty when nothing matched.
+		// The route pattern (/web/tasks/{id}) groups requests by endpoint; a path no route matches has
+		// its client's prefix (/web/*), or none outside every prefix.
 		if route := chi.RouteContext(r.Context()).RoutePattern(); route != "" {
 			httpFields.Str("route", route)
 		}
@@ -105,7 +108,7 @@ func (rc *recovery) serve(next http.Handler, ww middleware.WrapResponseWriter, r
 			rc.midReply = true
 			return
 		}
-		writeProblem(ww, r, newProblem(http.StatusInternalServerError, internalErrorDetail))
+		handler.WriteProblem(ww, r, handler.NewProblem(http.StatusInternalServerError, handler.InternalErrorDetail))
 	}()
 
 	next.ServeHTTP(ww, r)

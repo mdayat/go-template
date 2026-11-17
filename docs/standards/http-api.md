@@ -1,13 +1,67 @@
 # HTTP API
 
-Routes live in `internal/api`, one file per resource (`tasks.go`), mounted in `router.go`.
 Handlers stay thin: read the request, call the service, write the reply. Rules about what's valid
-live in the service ([errors.md](errors.md)).
+live in the service ([errors.md](errors.md)), shared by every client. Where files go:
+[structure.md](structure.md).
+
+## Clients, paths and versions
+
+Each kind of client has its routes under its own prefix, in its own package, with its own request
+and reply types, all calling the same services. So one client's routes can change without any risk
+to another's: a field renamed for the web app can't break the mobile app.
+
+| Client | Path | Package | May change |
+|---|---|---|---|
+| mobile apps | `/mobile/v1/...` | `internal/api/mobile` | only by adding (below): installs of old versions call it for years |
+| web app | `/web/...` | `internal/api/web` | freely, in the same release as the web app, which is deployed with the API |
+| admins | `/admin/...` | `internal/api/admin` | freely, with the admin app; every route needs an admin (`admin.RequireAdmin`) |
+| your own services | `/internal/...` | `internal/api/internal` | with those services; their own sign-in |
+| outside services' webhooks | `/webhooks/<provider>` | `internal/api/webhooks` | as the provider sends; checked by the provider's signature, outside the sign-in group |
+
+The template has the first three; add the others when a project needs them, as a route group in
+`NewRouter` (`internal/api/router.go`) with its own middleware. A route both apps need gets a
+handler in each package: two thin handlers calling one service, so each reply can change on its own.
+The error body (`handler.Problem`) is the one reply type every client shares.
+
+The mobile contract is more than `internal/api/mobile`. It's also everything a mobile request goes
+through, so change these only by adding too:
+
+- what every client's handlers share (`internal/api/handler`: the body decoder, error replies,
+  paging);
+- the replies the router gives before a handler runs: 401, 429 with `Retry-After` and the
+  `X-RateLimit-*` headers, 404 and 405 with `Allow`, 503 when a request runs out of time;
+- the services' rules: a tighter limit (a shorter title, a smaller page) or a changed error
+  `detail` or field `rule` changes what old app versions accept and see, whichever client asked for
+  it.
+
+**Changing a web or admin route.** It ships in the same release as its app, but for a few minutes
+of every deploy old and new API copies run side by side, and a page already open keeps calling the
+old shape until it's reloaded. Rename or remove in two releases: add the new field or route, then
+remove the old one once the app no longer uses it.
+
+**Changing a mobile route.** Add a route, a reply field, or an optional request field: old app
+versions ignore what they don't know. Never remove, rename or retype a field or route, change what a
+field means, or make an optional field required. A change that can't be made that way is a new
+version, `/mobile/v2/...`, in its own package (`internal/api/mobile/v2`), served beside v1 until no
+old version calls it. To see which do: apps send `User-Agent: <app>/<version>`
+(`myapp-ios/3.4.1`), and every request's log line has it as `user_agent.original`. The version is
+only in the mobile path; the web and admin apps change with the API.
+
+**Naming.**
+
+- Paths are plural nouns in kebab-case: `/tasks`, `/tasks/{id}`, `/task-exports`. At most one
+  level of nesting: `/tasks/{id}/comments`, never deeper; past that, a route of its own with a
+  filter (`/comments?task_id=`).
+- An action that isn't create, read, change or delete is a noun you create:
+  `POST /tasks/{id}/restore`, `POST /task-exports`, never `/exportTasks`.
+- Methods: `GET` reads, `POST` creates (or runs an action), `PATCH` changes the fields sent, `PUT`
+  replaces the whole thing, `DELETE` removes.
+- JSON keys and query parameters are snake_case: `owner_id`, `?older_than_days=`.
 
 ## Requests with a JSON body
 
-Read every body through `bodyDecoder.decode` (`internal/api/decode.go`), never `json.Unmarshal`
-directly. It enforces, in order:
+Read every body through `handler.Decoder`'s `Decode` (`internal/api/handler/decode.go`), never
+`json.Unmarshal` directly. It enforces, in order:
 
 | Problem | Reply |
 |---|---|
@@ -26,7 +80,7 @@ Validation tags check **shape** (present, a UUID, at most 100 items). Rules abou
 you use another.
 
 An ID in a body is a `string` with `validate:"required,uuid"`, parsed with `uuid.MustParse` after
-`decode` has checked it. A `uuid.UUID` field works for good input, but a malformed one gets a vague
+`Decode` has checked it. A `uuid.UUID` field works for good input, but a malformed one gets a vague
 400 that doesn't name the field.
 
 Optional fields in an update are pointers: `nil` means "not sent, leave it alone"
@@ -40,7 +94,7 @@ Go's JSON reading (go-json and the standard library alike, with no setting to ch
 
 ## Replies
 
-- Success: JSON with snake_case keys, written with `writeJSON`. Times are RFC 3339 in UTC.
+- Success: JSON with snake_case keys, written with `handler.WriteJSON`. Times are RFC 3339 in UTC.
   `201 Created` sets `Location`; `204 No Content` has no body.
 <!-- remove:worker -->
 - `202 Accepted` means a job was queued; it replies `{"job_id": "..."}`
@@ -58,7 +112,7 @@ Go's JSON reading (go-json and the standard library alike, with no setting to ch
 ```
 
 `detail` and `message` are for people; clients branch on `status` and the field's `rule`. Unknown
-paths get a 404 problem and wrong methods a 405 with an `Allow` header. Every GET route also
+paths get a 404 problem and wrong methods a 405 with an `Allow` header, signed in or not. Every GET route also
 answers HEAD (HTTP requires it; uptime checkers use it). An error reply drops any
 headers the handler had set that describe a body (`Content-Encoding`, `Cache-Control`, `ETag`,
 ...), since they'd misdescribe the problem.
@@ -95,8 +149,9 @@ mapper. Another kind (opaque tokens looked up in a table, say) is another packag
 
 - For local runs, `make dev-token user=alice` prints a token the local API accepts; run it before
   the API's first start, which needs the key it makes. The API refuses its keys in production.
-- A route that must stay open (a webhook from another service) goes outside the `authenticate`
-  group in `NewRouter`, and checks its caller its own way.
+- A route that must stay open (a webhook from another service, under `/webhooks/<provider>`) goes
+  in a group of its own in `NewRouter`, without the `signedIn` middleware, and checks its caller its
+  own way.
 - Endpoint tests sign in through the real check: `testAPI` signs every request in as
   `testSubject`, with a token from a test issuer (`internal/authtest`), unless the test sets its
   own `Authorization` header. `testUser(t, pool, admin)` records that user (as an admin or not)
@@ -104,14 +159,14 @@ mapper. Another kind (opaque tokens looked up in a table, say) is another packag
 
 ### Who may do what
 
-A handler gets the signed-in user with `currentUser(r)` and passes it to the service, which
+A handler gets the signed-in user with `handler.CurrentUser(r)` and passes it to the service, which
 decides: the rules live in one place, the same for every entry point. In the tasks example:
 
 - A user sees and changes only their own tasks. Someone else's is a 404, the same reply as one
   that doesn't exist: a 403 would confirm it does. Replies show the task's `owner_id`.
 - An admin (`is_admin`) sees and changes everyone's, tasks from before owners included.
-- An action that's no secret but not for everyone (an admin-only endpoint) is a 403,
-  `apperr.Forbidden`.
+- An action that's no secret but not for everyone is a 403, `apperr.Forbidden`. Admin-only
+  routes go under `/admin`, where `admin.RequireAdmin` replies 403 to anyone else.
 
 ## Rate limits
 

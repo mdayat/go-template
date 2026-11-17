@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/mdayat/go-template/internal/api/handler"
 	"github.com/mdayat/go-template/internal/apperr"
 	"github.com/mdayat/go-template/internal/auth"
 	"github.com/mdayat/go-template/internal/user"
@@ -40,31 +41,17 @@ func authenticate(authn Authenticator, users *user.Service, signedOut *rateLimit
 					// Tells the client which kind of credentials to send (RFC 6750).
 					w.Header().Set("WWW-Authenticate", "Bearer")
 				}
-				writeError(w, r, err)
+				handler.WriteError(w, r, err)
 				return
 			}
 			u, err := users.SignIn(r.Context(), id.Subject)
 			if err != nil {
-				writeError(w, r, err)
+				handler.WriteError(w, r, err)
 				return
 			}
-			recordUser(r, u)
-			next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), userKey{}, u)))
+			next.ServeHTTP(w, handler.SignedIn(r, u))
 		})
 	}
-}
-
-// userKey holds the signed-in user in a request's context.
-type userKey struct{}
-
-// currentUser returns who signed in to make r, for handlers to pass to services. Only routes behind
-// authenticate have one: calling it elsewhere is a bug, and panics.
-func currentUser(r *http.Request) user.User {
-	u, ok := r.Context().Value(userKey{}).(user.User)
-	if !ok {
-		panic("currentUser: the route isn't behind authenticate")
-	}
-	return u
 }
 
 func identify(r *http.Request, authn Authenticator) (auth.Identity, error) {
@@ -79,7 +66,7 @@ func identify(r *http.Request, authn Authenticator) (auth.Identity, error) {
 		return auth.Identity{}, fmt.Errorf("authenticate: %w: %w", err, apperr.Unauthenticated(signInRequired))
 	case err != nil:
 		return auth.Identity{}, fmt.Errorf("authenticate: %w: %w", err,
-			&statusError{status: http.StatusServiceUnavailable, detail: "sign-in can't be checked right now"})
+			&handler.StatusError{Status: http.StatusServiceUnavailable, Detail: "sign-in can't be checked right now"})
 	}
 	return id, nil
 }

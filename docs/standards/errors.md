@@ -47,8 +47,8 @@ The HTTP API replies 400, 422, 404 and 409 for them, and has two kinds of its ow
 - Add a kind only when some caller must react to it differently from the existing ones (sign-in
   would add an unauthorized kind).
 <!-- remove:api -->
-- `problemFor` (`internal/api/problem.go`) maps each kind to a reply; the linter fails until a new
-  kind has its own case.
+- `problemFor` (`internal/api/handler/handler.go`) maps each kind to a reply; the linter fails
+  until a new kind has its own case.
 <!-- remove:end -->
 
 ## Turning driver errors into kinds
@@ -66,18 +66,20 @@ not every service. — lint (depguard)
 <!-- remove:api -->
 ## Handlers
 
-Handlers have the type `func(w, r) error` and are wrapped with `Handle`:
+Handlers have the type `func(w, r) error` and are wrapped with `handler.Handle`:
 
 ```go
-r.Get("/tasks/{id}", Handle(tr.get))
+r.Get("/tasks/{id}", handler.Handle(tr.get))
 ```
 
-`Handle` writes the reply for a returned error ([RFC 9457](https://www.rfc-editor.org/rfc/rfc9457)
-problem JSON, see [http-api.md](http-api.md)) and records the error for the summary line. A
-handler that has started its reply can't change the status any more; its error is still logged.
+`handler.Handle` writes the reply for a returned error
+([RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem JSON, see [http-api.md](http-api.md))
+and records the error for the summary line. A handler that has started its reply can't change the
+status any more; its error is still logged.
 
 Some failures exist only in HTTP (body too large: 413, wrong content type: 415). They're
-`statusError`s inside `internal/api`, not `apperr` kinds, because no service could cause them.
+`handler.StatusError`s (`internal/api/handler`), not `apperr` kinds, because no service could cause
+them.
 
 ## Panics
 

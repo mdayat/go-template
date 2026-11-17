@@ -15,6 +15,8 @@ import (
 	"github.com/rs/zerolog"
 	"go.opentelemetry.io/otel/metric/noop"
 	tracenoop "go.opentelemetry.io/otel/trace/noop"
+
+	"github.com/mdayat/go-template/internal/api/handler"
 )
 
 type testTask struct {
@@ -51,22 +53,22 @@ type testLimits struct {
 func decodeRouter(t *testing.T) http.Handler {
 	t.Helper()
 	router := newBaseRouter(zerolog.Nop(), noop.NewMeterProvider(), tracenoop.NewTracerProvider(), nil)
-	decoder := newBodyDecoder()
-	router.Post("/tasks", Handle(func(w http.ResponseWriter, r *http.Request) error {
+	decoder := handler.NewDecoder()
+	router.Post("/tasks", handler.Handle(func(w http.ResponseWriter, r *http.Request) error {
 		var task testTask
-		if err := decoder.decode(w, r, &task); err != nil {
+		if err := decoder.Decode(w, r, &task); err != nil {
 			return err
 		}
-		writeJSON(w, http.StatusOK, "application/json", task)
+		handler.WriteJSON(w, http.StatusOK, "application/json", task)
 		return nil
 	}))
-	router.Post("/limits", Handle(func(w http.ResponseWriter, r *http.Request) error {
+	router.Post("/limits", handler.Handle(func(w http.ResponseWriter, r *http.Request) error {
 		var limits testLimits
-		return decoder.decode(w, r, &limits)
+		return decoder.Decode(w, r, &limits)
 	}))
-	router.Post("/not-a-pointer", Handle(func(w http.ResponseWriter, r *http.Request) error {
+	router.Post("/not-a-pointer", handler.Handle(func(w http.ResponseWriter, r *http.Request) error {
 		var task testTask
-		return decoder.decode(w, r, task)
+		return decoder.Decode(w, r, task)
 	}))
 	return router
 }
@@ -137,7 +139,7 @@ func TestDecodeRejectsBadBodies(t *testing.T) {
 		{"field that can't parse itself", "/tasks", "application/json", `{"name":"a","priority":1,"ref":"nope"}`, 400, "request body can't be read"},
 		{"unknown field", "/tasks", "application/json", `{"name":"a","priority":1,"colour":"red"}`, 400, `unknown field "colour"`},
 		{"two JSON values", "/tasks", "application/json", valid + valid, 400, "request body must hold a single JSON value"},
-		{"too large", "/tasks", "application/json", `{"name":"` + strings.Repeat("a", maxBodyBytes) + `"}`, 413, "request body must be at most 1 MB"},
+		{"too large", "/tasks", "application/json", `{"name":"` + strings.Repeat("a", handler.MaxBodyBytes) + `"}`, 413, "request body must be at most 1 MB"},
 		{"our bug: not a pointer", "/not-a-pointer", "application/json", valid, 500, "internal server error"},
 	}
 
@@ -146,7 +148,7 @@ func TestDecodeRejectsBadBodies(t *testing.T) {
 			t.Parallel()
 			rec := postJSON(t, decodeRouter(t), tt.path, tt.contentType, tt.body)
 
-			var got problem
+			var got handler.Problem
 			if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 				t.Fatalf("reply is not JSON: %q: %v", rec.Body.String(), err)
 			}
@@ -166,11 +168,11 @@ func TestDecodeReportsRuleBreaksByJSONName(t *testing.T) {
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want 422; body %s", rec.Code, rec.Body)
 	}
-	var got problem
+	var got handler.Problem
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatalf("reply is not JSON: %v", err)
 	}
-	want := []fieldProblem{
+	want := []handler.FieldProblem{
 		{Field: "name", Rule: "required", Message: "is required"},
 		{Field: "priority", Rule: "lte", Message: "must be at most 5"},
 		{Field: "email", Rule: "email", Message: "must be an email address"},
@@ -190,7 +192,7 @@ func TestRuleMessageWordsLimitsByKind(t *testing.T) {
 	t.Parallel()
 	rec := postJSON(t, decodeRouter(t), "/limits", "application/json", `{"title":"ab","tags":["x"],"score":0,"site":"not a url","ref":"x","small":10,"code":"a1"}`)
 
-	var reply problem
+	var reply handler.Problem
 	if err := json.Unmarshal(rec.Body.Bytes(), &reply); err != nil {
 		t.Fatalf("reply is not JSON: %q: %v", rec.Body.String(), err)
 	}
@@ -217,7 +219,7 @@ func TestRuleMessageWordsLimitsByKind(t *testing.T) {
 // against a library swap or upgrade that doesn't.
 func TestDecodeSurvivesDeepNesting(t *testing.T) {
 	t.Parallel()
-	depth := maxBodyBytes/2 - 20
+	depth := handler.MaxBodyBytes/2 - 20
 	body := `{"name":` + strings.Repeat("[", depth) + strings.Repeat("]", depth) + `}`
 
 	rec := postJSON(t, decodeRouter(t), "/tasks", "application/json", body)
@@ -241,10 +243,10 @@ func TestDecodeBodyThatBreaksMidRead(t *testing.T) {
 	t.Parallel()
 	var logs bytes.Buffer
 	router := newBaseRouter(zerolog.New(&logs), noop.NewMeterProvider(), tracenoop.NewTracerProvider(), nil)
-	decoder := newBodyDecoder()
-	router.Post("/tasks", Handle(func(w http.ResponseWriter, r *http.Request) error {
+	decoder := handler.NewDecoder()
+	router.Post("/tasks", handler.Handle(func(w http.ResponseWriter, r *http.Request) error {
 		var task testTask
-		return decoder.decode(w, r, &task)
+		return decoder.Decode(w, r, &task)
 	}))
 
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/tasks", errAfter{strings.NewReader(`{"name":`)})
@@ -252,7 +254,7 @@ func TestDecodeBodyThatBreaksMidRead(t *testing.T) {
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
-	var got problem
+	var got handler.Problem
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatalf("reply is not JSON: %q: %v", rec.Body.String(), err)
 	}

@@ -21,7 +21,7 @@ import (
 
 // observeRequests records each request to meters and tracers, as OpenTelemetry's HTTP conventions
 // name them: its time (http.server.request.duration, by route, method and status) and a span
-// ("GET /tasks/{id}") that the request's queries, commands, outside calls and queued jobs hang
+// ("GET /web/tasks/{id}") that the request's queries, commands, outside calls and queued jobs hang
 // under. The span holds the route pattern as url.path, never the path itself, which can hold an
 // ID, an email or a token. The health check isn't recorded: load balancers call it every few
 // seconds. With both off it adds nothing: otelhttp costs a few microseconds a request even
@@ -48,7 +48,7 @@ func observeRequests(meters metric.MeterProvider, tracers trace.TracerProvider) 
 		// in our logs. Behind your own services, which do send theirs, drop this.
 		otelhttp.WithPropagators(propagator),
 		otelhttp.WithPublicEndpointFn(func(*http.Request) bool { return true }),
-		// The method until the route is known; then "GET /tasks/{id}" (below).
+		// The method until the route is known; then "GET /web/tasks/{id}" (below).
 		otelhttp.WithSpanNameFormatter(func(_ string, r *http.Request) string { return spanMethod(r.Method) }),
 		// Fixed: otelhttp otherwise takes server.address and server.port from the request's Host
 		// header, which a client can set to anything, making a new series each time. Port 0 leaves

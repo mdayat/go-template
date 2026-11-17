@@ -9,7 +9,8 @@ coverage number: covered lines can still be wrong, and a test that can't fail pr
   does, with the real services on a real Postgres, and checks what the caller gets **and the rows**.
   <!-- remove:api -->
   - An endpoint test sends a request to the real router (`testAPI` in `internal/api/main_test.go`
-    builds it) and checks **the reply and the rows**. Example: `internal/api/tasks_test.go`.
+    builds it) and checks **the reply and the rows**, once per client that serves the route (a
+    subtest each). Example: `internal/api/tasks_test.go`.
   <!-- remove:end -->
   <!-- remove:worker -->
   - A job test runs the job through the real handlers (`testWorker` in

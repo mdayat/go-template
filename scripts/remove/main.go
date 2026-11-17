@@ -39,7 +39,7 @@ func parts() map[string][]string {
 		// jobs that never run.
 		"worker": {
 			"cmd/worker", "internal/worker", "internal/jobs", "internal/queue", "internal/testqueue",
-			"docs/standards/worker.md", "internal/api/purge.go", "internal/api/purge_test.go",
+			"docs/standards/worker.md", "internal/api/admin/purge.go", "internal/api/purge_test.go",
 			"local/grafana/dashboards/worker.json",
 		},
 		// A project keeping both parts needs neither the markers nor this tool.
@@ -61,7 +61,7 @@ func mentions() map[string][]string {
 		"worker": {
 			"cmd/worker", "internal/worker", "internal/jobs", "internal/queue", "testqueue", "worker.md",
 			"testWorker", "run-worker", "PURGE_WEBHOOK_URL", "deleted-row-purges", "asynq",
-			"job.run.duration", "worker.json",
+			"job.run.duration", "worker.json", "admin.Purges",
 		},
 	}
 }

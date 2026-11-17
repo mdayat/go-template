@@ -15,14 +15,15 @@ recorded: database and key-value store clients record every call they make, even
 background ones (a job queue polls every second), and each would otherwise be a trace of its own.
 
 <!-- remove:api -->
-- **Each request** (API; [otelhttp](https://pkg.go.dev/go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp),
-  `internal/api/telemetry.go`): a span named by its route (`GET /tasks/{id}`; `HTTP` for a method
-  HTTP doesn't define), with the method, status, user agent, the route pattern as its path (never
-  the path itself, which can hold an ID or a token) and the client's IP as
-  [`TRUSTED_PROXIES`](http-api.md#rate-limits) finds it (else the connection's, as the request
-  log has it). The connection's own address and port and the method as sent are there too: the
-  client's IP and user agent are the only personal data a span holds, the same the request log
-  keeps. A 5xx or a reply cut off by a panic marks it failed. The health check isn't traced.
+- **Each request** (API;
+  [otelhttp](https://pkg.go.dev/go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp),
+  `internal/api/telemetry.go`): a span named by its route (`GET /web/tasks/{id}`; `HTTP` for a
+  method HTTP doesn't define), with the method, status, user agent, the route pattern as its path
+  (never the path itself, which can hold an ID or a token) and the client's IP as
+  [`TRUSTED_PROXIES`](http-api.md#rate-limits) finds it (else the connection's, as the request log
+  has it). The connection's own address and port and the method as sent are there too: the client's
+  IP and user agent are the only personal data a span holds, the same the request log keeps. A 5xx
+  or a reply cut off by a panic marks it failed. The health check isn't traced.
   - Every caller counts as outside: a trace a client sends (its `traceparent` header) is linked to
     the request's span, never continued, so no client can make us keep its requests or choose the
     trace IDs in our logs. Behind your own services that do send theirs, drop

@@ -1,4 +1,4 @@
-package api
+package handler
 
 import (
 	"bytes"
@@ -17,15 +17,17 @@ import (
 	"github.com/mdayat/go-template/internal/json"
 )
 
-const maxBodyBytes = 1 << 20 // 1 MB
+// MaxBodyBytes is the largest request body Decode reads.
+const MaxBodyBytes = 1 << 20 // 1 MB
 
-// bodyDecoder reads JSON request bodies. Make one with newBodyDecoder and share it: the validator
-// caches what it learns about each struct type.
-type bodyDecoder struct {
+// Decoder reads JSON request bodies. Make one with NewDecoder and share it: the validator caches
+// what it learns about each struct type.
+type Decoder struct {
 	validate *validator.Validate
 }
 
-func newBodyDecoder() *bodyDecoder {
+// NewDecoder returns a Decoder.
+func NewDecoder() *Decoder {
 	validate := validator.New(validator.WithRequiredStructEnabled())
 	// Report fields by the JSON names the client sent, not the Go field names.
 	validate.RegisterTagNameFunc(func(f reflect.StructField) string {
@@ -35,23 +37,23 @@ func newBodyDecoder() *bodyDecoder {
 		}
 		return name
 	})
-	return &bodyDecoder{validate: validate}
+	return &Decoder{validate: validate}
 }
 
-// decode reads r's JSON body into dst (a pointer to a struct) and validates it with dst's
+// Decode reads r's JSON body into dst (a pointer to a struct) and validates it with dst's
 // `validate` tags. A body the client got wrong returns an error that replies 400, 413, 415 or 422
 // with a message saying what to fix; any other error is a bug on our side.
-func (d *bodyDecoder) decode(w http.ResponseWriter, r *http.Request, dst any) error {
+func (d *Decoder) Decode(w http.ResponseWriter, r *http.Request, dst any) error {
 	// Requiring application/json also blocks cross-site HTML forms, which can't send it.
 	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if err != nil || mediaType != "application/json" {
-		return &statusError{status: http.StatusUnsupportedMediaType, detail: "Content-Type must be application/json"}
+		return &StatusError{Status: http.StatusUnsupportedMediaType, Detail: "Content-Type must be application/json"}
 	}
 
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, MaxBodyBytes))
 	if err != nil {
 		if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
-			return &statusError{status: http.StatusRequestEntityTooLarge, detail: "request body must be at most 1 MB"}
+			return &StatusError{Status: http.StatusRequestEntityTooLarge, Detail: "request body must be at most 1 MB"}
 		}
 		// The client sent less than it announced, or the connection broke.
 		return fmt.Errorf("read request body: %w: %w", err, apperr.BadRequest("request body can't be read"))

@@ -15,7 +15,7 @@ The example: `deleted_rows:purge` removes for good, from every soft-deleted tabl
 deleted more than 30 days ago ([database.md](database.md#soft-delete)). The worker's scheduler
 queues it every day at midnight UTC.
 <!-- remove:api -->
-`POST /deleted-row-purges` queues it on demand.
+`POST /admin/deleted-row-purges` queues it on demand.
 <!-- remove:end -->
 
 ## Where things go

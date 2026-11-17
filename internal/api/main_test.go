@@ -15,6 +15,7 @@ import (
 	"go.opentelemetry.io/otel/metric/noop"
 	tracenoop "go.opentelemetry.io/otel/trace/noop"
 
+	"github.com/mdayat/go-template/internal/api/handler"
 	"github.com/mdayat/go-template/internal/auth/jwks"
 	"github.com/mdayat/go-template/internal/authtest"
 	"github.com/mdayat/go-template/internal/db"
@@ -140,13 +141,13 @@ func decodeReply(t *testing.T, rec *httptest.ResponseRecorder, reply any) {
 type problemReply struct {
 	Status int
 	Detail string
-	Errors []fieldProblem
+	Errors []handler.FieldProblem
 }
 
 // readProblem returns rec's status and problem body, for the test to compare.
 func readProblem(t *testing.T, rec *httptest.ResponseRecorder) problemReply {
 	t.Helper()
-	var p problem
+	var p handler.Problem
 	decodeReply(t, rec, &p)
 	return problemReply{Status: rec.Code, Detail: p.Detail, Errors: p.Errors}
 }
