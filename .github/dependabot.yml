@@ -34,3 +34,18 @@ updates:
       # Also pinned with its checksum in CI's install step, which Dependabot can't update: bump
       # both by hand (make check-versions compares them).
       - dependency-name: arigaio/atlas
+
+  # Images in compose.yaml: only the local metrics tools. The other images already take each new
+  # minor release (postgres:17); a new major is chosen by hand, to match what production runs (and
+  # a newer Postgres can't read an older one's local data). CI doesn't start Prometheus or Grafana:
+  # try their pull request with make metrics-up before merging.
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule:
+      interval: quarterly
+    groups:
+      compose-images:
+        patterns: ["*"]
+    allow:
+      - dependency-name: prom/prometheus
+      - dependency-name: grafana/grafana

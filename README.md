@@ -147,12 +147,14 @@ Before you push: `make fmt lint test check-generated`. The database workflow is 
 
 Run Dependabot when you want updates: on GitHub, **Insights → Dependency graph → Dependabot →
 Check for updates** (it also runs once a quarter, in case nobody does). Each run opens at most
-three pull requests, one each for Go modules (the app's and the tools'), GitHub Actions and the
-Dockerfile's base images; merge each once CI passes, or close it to skip. When one update in a
-pull request breaks CI (a new lint rule, a changed API), fix the code in that pull request, or add
-the dependency to `ignore` in `.github/dependabot.yml` and check for updates again. Known security
-holes don't wait for Dependabot: `make vuln`, in CI, fails on them. Two versions are changed by
-hand, everywhere at once (`make check-versions`, run by CI, fails until they agree):
+four pull requests, one each for Go modules (the app's and the tools'), GitHub Actions, the
+Dockerfile's base images and the local Prometheus and Grafana in `compose.yaml`; merge each once
+CI passes (CI doesn't start Prometheus or Grafana: try theirs with `make metrics-up` first), or
+close it to skip. When one update in a pull request breaks CI (a new lint rule, a changed API),
+fix the code in that pull request, or add the dependency to `ignore` in `.github/dependabot.yml`
+and check for updates again. Known security holes don't wait for Dependabot: `make vuln`, in CI,
+fails on them. Two versions are changed by hand, everywhere at once (`make check-versions`, run
+by CI, fails until they agree):
 
 - **Go:** the `go` line in `go.mod` and `tools/go.mod`, and the Dockerfile's `golang` image.
   Dependabot's pull request for a newer `golang` image is the reminder; `make vuln` also reports
