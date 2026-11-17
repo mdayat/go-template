@@ -204,6 +204,70 @@ func (s *Service) PurgeDeleted(ctx context.Context, olderThanDays int) (int64, e
 	return removed, nil
 }
 
+// MaxTrimBatch is the most tasks one TrimTitles call checks.
+const MaxTrimBatch = 10_000
+
+// TitleTrim is what one TrimTitles call did.
+type TitleTrim struct {
+	// Last is the last task checked: the next call's after. Zero when there was none left.
+	Last    uuid.UUID
+	Checked int
+	Trimmed int
+	// Taken were left as they were: the owner has another live task with the trimmed title.
+	Taken int
+	// Blank were left as they were: only spaces, and a title can't be empty.
+	Blank int
+	// Changed were left as they were: edited or deleted after this call read them.
+	Changed int
+}
+
+// TrimTitles trims the spaces around the titles of up to limit (1 to MaxTrimBatch) live tasks,
+// those with IDs after after, in ID order: Create and Update trim titles, but rows written another
+// way may still have them. Running it again changes nothing more.
+func (s *Service) TrimTitles(ctx context.Context, after uuid.UUID, limit int) (TitleTrim, error) {
+	if limit < 1 || limit > MaxTrimBatch {
+		return TitleTrim{}, fmt.Errorf("trim titles: limit must be from 1 to %d, got %d", MaxTrimBatch, limit)
+	}
+	rows, err := s.queries.ListTasksByIDAfter(ctx, db.ListTasksByIDAfterParams{After: after, RowLimit: int32(limit)})
+	if err != nil {
+		return TitleTrim{}, fmt.Errorf("list tasks after %s: %w", after, err)
+	}
+	var done TitleTrim
+	for _, row := range rows {
+		done.Last = row.ID
+		done.Checked++
+		trimmed := strings.TrimSpace(row.Title)
+		switch trimmed {
+		case row.Title:
+			continue
+		case "":
+			done.Blank++
+			continue
+		}
+		// Only from the title read: one a user set since then is theirs to keep.
+		changed, err := s.queries.SetTaskTitleUnlessTaken(ctx, db.SetTaskTitleUnlessTakenParams{
+			ID: row.ID, OldTitle: row.Title, Title: trimmed,
+		})
+		if err != nil {
+			return TitleTrim{}, fmt.Errorf("trim the title of task %s: %w", row.ID, err)
+		}
+		if changed == 1 {
+			done.Trimmed++
+			continue
+		}
+		unchanged, err := s.queries.TaskHasTitle(ctx, db.TaskHasTitleParams{ID: row.ID, Title: row.Title})
+		if err != nil {
+			return TitleTrim{}, fmt.Errorf("check task %s: %w", row.ID, err)
+		}
+		if unchanged {
+			done.Taken++
+		} else {
+			done.Changed++
+		}
+	}
+	return done, nil
+}
+
 func cleanTitle(title string) (string, error) {
 	title = strings.TrimSpace(title)
 	switch {

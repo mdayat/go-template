@@ -1,6 +1,7 @@
 package task
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"slices"
@@ -749,5 +750,139 @@ func TestAdminsReachEveryonesTasks(t *testing.T) {
 	}
 	if got := deletedInDB(t, pool); len(got) != 0 {
 		t.Errorf("deleted tasks = %q, want none", got)
+	}
+}
+
+func TestTrimTitles(t *testing.T) {
+	t.Parallel()
+	s, pool := testService(t)
+	other := seedUser(t, pool, "other", false)
+	seedTask(t, pool, "  spaced \t", false, seedTime)
+	seedTask(t, pool, "clean", false, seedTime)
+	seedTask(t, pool, "   ", false, seedTime)
+	seedTask(t, pool, "taken", false, seedTime)
+	seedTask(t, pool, " taken", false, seedTime)
+	seedTaskOf(t, pool, other.ID, " clean", false, seedTime) // another owner's "clean" doesn't block it
+	seedTaskOf(t, pool, nil, " ownerless", false, seedTime)
+	markDeleted(t, pool, seedTask(t, pool, " deleted", false, seedTime), seedTime)
+	markDeleted(t, pool, seedTask(t, pool, "y", false, seedTime), seedTime) // a deleted task's title is free
+	seedTask(t, pool, " y", false, seedTime)
+	seedTaskOf(t, pool, nil, "z", false, seedTime) // ownerless tasks' titles are unique among them too
+	seedTaskOf(t, pool, nil, " z", false, seedTime)
+
+	var total TitleTrim
+	var after uuid.UUID
+	for {
+		// Pages of 2 cross every kind of row with a page boundary somewhere.
+		page, err := s.TrimTitles(t.Context(), after, 2)
+		if err != nil {
+			t.Fatalf("TrimTitles() error = %v", err)
+		}
+		if page.Checked == 0 {
+			break
+		}
+		if page.Last.String() <= after.String() {
+			t.Fatalf("TrimTitles() Last = %s after %s, want it to move on", page.Last, after)
+		}
+		total.Checked += page.Checked
+		total.Trimmed += page.Trimmed
+		total.Taken += page.Taken
+		total.Blank += page.Blank
+		after = page.Last
+	}
+
+	want := TitleTrim{Checked: 10, Trimmed: 4, Taken: 2, Blank: 1}
+	if total != want {
+		t.Errorf("TrimTitles() in all = %+v, want %+v", total, want)
+	}
+	rows, err := pool.Query(t.Context(), `SELECT format('%L deleted=%s changed=%s', title, deleted_at IS NOT NULL, updated_at > $1)
+		FROM tasks`, seedTime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	titles, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		t.Fatal(err)
+	}
+	slices.Sort(titles)
+	wantTitles := []string{
+		`'   ' deleted=f changed=f`,
+		`' deleted' deleted=t changed=f`,
+		`' taken' deleted=f changed=f`,
+		`' z' deleted=f changed=f`,
+		`'clean' deleted=f changed=f`,
+		`'clean' deleted=f changed=t`,
+		`'ownerless' deleted=f changed=t`,
+		`'spaced' deleted=f changed=t`,
+		`'taken' deleted=f changed=f`,
+		`'y' deleted=f changed=t`,
+		`'y' deleted=t changed=f`,
+		`'z' deleted=f changed=f`,
+	}
+	if diff := cmp.Diff(wantTitles, titles); diff != "" {
+		t.Errorf("tasks mismatch (-want +got):\n%s", diff)
+	}
+
+	again, err := s.TrimTitles(t.Context(), uuid.UUID{}, MaxTrimBatch)
+	if err != nil || again.Trimmed != 0 {
+		t.Errorf("TrimTitles() again = %+v, %v; want nothing trimmed", again, err)
+	}
+}
+
+func TestTrimTitlesChecksTheLimit(t *testing.T) {
+	t.Parallel()
+	s, _ := testService(t)
+	for _, limit := range []int{0, -1, MaxTrimBatch + 1} {
+		if _, err := s.TrimTitles(t.Context(), uuid.UUID{}, limit); err == nil {
+			t.Errorf("TrimTitles(limit %d) error = nil, want one", limit)
+		}
+	}
+}
+
+// afterList runs then once, right after the first page of tasks is read: as the apps, which keep
+// running, would between a read and a write.
+type afterList struct {
+	db.DBTX
+	then func()
+}
+
+//nolint:ireturn // stands in for db.DBTX, whose Query returns pgx.Rows
+func (a *afterList) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
+	rows, err := a.DBTX.Query(ctx, sql, args...) //nolint:rowserrcheck // the caller reads and checks them
+	if strings.Contains(sql, "ListTasksByIDAfter") && a.then != nil {
+		a.then()
+		a.then = nil
+	}
+	return rows, err
+}
+
+// A title a user changed, or a task they deleted, after the page was read is theirs: left as it is.
+func TestTrimTitlesLeavesWhatChangedMeanwhile(t *testing.T) {
+	t.Parallel()
+	pool := testdb.New(t)
+	edited := seedTask(t, pool, " edited", false, seedTime)
+	deleted := seedTask(t, pool, " deleted", false, seedTime)
+	seedTask(t, pool, " kept", false, seedTime)
+	s := NewService(db.New(&afterList{DBTX: pool, then: func() {
+		if _, err := pool.Exec(t.Context(), "UPDATE tasks SET title = 'mine' WHERE id = $1", edited.ID); err != nil {
+			t.Error(err)
+		}
+		markDeleted(t, pool, deleted, seedTime)
+	}}))
+
+	got, err := s.TrimTitles(t.Context(), uuid.UUID{}, MaxTrimBatch)
+	if err != nil {
+		t.Fatalf("TrimTitles() error = %v", err)
+	}
+	got.Last = uuid.UUID{}
+	if want := (TitleTrim{Checked: 3, Trimmed: 1, Changed: 2}); got != want {
+		t.Errorf("TrimTitles() = %+v, want %+v", got, want)
+	}
+	var titles []string
+	for _, task := range tasksInDB(t, pool) {
+		titles = append(titles, task.Title)
+	}
+	if want := []string{" deleted", "kept", "mine"}; !slices.Equal(titles, want) {
+		t.Errorf("titles = %q, want %q", titles, want)
 	}
 }

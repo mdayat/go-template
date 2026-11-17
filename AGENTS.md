@@ -29,6 +29,7 @@ Tests that use Valkey also read `TEST_REDIS_URL`.
 | schema | `db/schema.sql`, then `make migrate-diff name=<what>` | `db/migrations/` |
 | queries | `db/queries/<feature>.sql`, then `make generate` | `db/queries/tasks.sql` |
 | settings | the program's `cmd/<name>/settings.go` (read through `internal/config`), its `settings_test.go`, and `.example.env` | `DATABASE_URL` |
+| a one-off data fix or backfill | `internal/oneoff/<name>.go`, listed in `Commands()`; writes only in `r.Batch` (undone in a dry run, the default), pages by ID ([commands.md](docs/standards/commands.md)) | `internal/oneoff/trim_task_titles.go` |
 | anything several features use | not in one feature's files (removing that feature would break the rest): test helpers in a package's `main_test.go`, other code in a shared file | `internal/testdb` (one package every test uses) |
 
 The full rules and a new feature's checklist: [structure.md](docs/standards/structure.md).
@@ -58,9 +59,9 @@ In the worker:
 <!-- remove:end -->
 Never edit `internal/db/` (generated) or a migration that's already merged (write a new one).
 Use JSON only through `internal/json`, never go-json or `encoding/json` (tests may use
-`encoding/json`); lint refuses it. Import pgx only in `internal/postgres`, `internal/startup`
-and `internal/testdb` (tests may use it to seed rows); lint refuses it elsewhere. A generated
-`pgtype` type gets an override in `sqlc.yaml` instead.
+`encoding/json`); lint refuses it. Import pgx only in `internal/postgres`, `internal/startup`,
+`internal/oneoff` and `internal/testdb` (tests may use it to seed rows); lint refuses it
+elsewhere. A generated `pgtype` type gets an override in `sqlc.yaml` instead.
 <!-- remove:valkey -->
 Valkey connections come from `internal/startup`, opened in `cmd/` (tests': `internal/testredis`);
 lint refuses go-redis elsewhere.

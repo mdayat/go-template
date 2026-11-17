@@ -135,6 +135,7 @@ Each program sets its own defaults in `settings.go`, to fit its work:
 - **worker**: 5 min, at least the longest job's time limit, so no job's statement is cut before
   its job is; and 1 min.
 <!-- remove:end -->
+- **oneoff**: 1 min and 1 min ([why](commands.md)).
 
 A value is a duration (`500ms`, `10s`, `5m`) in whole milliseconds, from 1 ms to 596 hours: 0
 is no limit in Postgres. Set them only through these settings: a program refuses to start if

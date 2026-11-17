@@ -50,6 +50,11 @@ that line, and a panic its stack: there is never a second line for the same fail
 One `job completed` line per run, with the error on it ([worker.md](worker.md#logging)).
 
 <!-- remove:end -->
+### One-off commands
+
+One `command completed` line per run, with its `run_id`, result, counts and error
+([commands.md](commands.md#what-every-run-gets)).
+
 
 ## Levels
 

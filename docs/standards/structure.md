@@ -54,6 +54,9 @@ In the worker:
 | job tests | `internal/worker/invoice_test.go`, through the real queue |
 
 <!-- remove:end -->
+A data fix or backfill for the feature, run once by hand, is a command of `cmd/oneoff`:
+`internal/oneoff/<name>.go` with its test, listed in `Commands()` ([commands.md](commands.md)).
+
 A feature only one entry point uses has only its rows.
 <!-- remove:api -->
 A route only one app needs is only in that app's package.

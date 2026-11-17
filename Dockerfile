@@ -27,6 +27,13 @@ COPY db/migrations/ migrations/
 USER 65532:65532
 CMD ["migrate", "apply", "--env", "deploy"]
 
+# One-off data commands (fixes, backfills), run by hand where the database is reachable:
+#   docker run --rm -e DATABASE_URL=... <image> <command> [--apply]
+# With no command it lists them; without --apply a run saves nothing.
+FROM gcr.io/distroless/static-debian13:nonroot AS oneoff
+COPY --from=build /out/oneoff /oneoff
+ENTRYPOINT ["/oneoff"]
+
 # remove:worker
 # The worker: runs queued jobs and queues the scheduled ones. It serves no port; run as many as the
 # jobs need.

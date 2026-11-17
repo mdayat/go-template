@@ -85,3 +85,56 @@ RETURNING *;
 -- name: PurgeDeletedTasks :execrows
 DELETE FROM tasks
 WHERE deleted_at < now() - sqlc.arg('older_than_days')::bigint * interval '1 day';
+
+-- ListTasksByIDAfter pages through every live task in ID order, for one-off commands that check
+-- each one: an ID's order never changes, so a page ends where the next begins even when nothing
+-- was changed (a dry run).
+-- name: ListTasksByIDAfter :many
+SELECT id, owner_id, title
+FROM tasks
+WHERE id > sqlc.arg('after')::uuid
+  AND deleted_at IS NULL
+ORDER BY id
+LIMIT sqlc.arg('row_limit');
+
+-- SetTaskTitleUnlessTaken changes a live task's title from old_title to title, unless it no longer
+-- has old_title (changed since it was read, by the apps that keep running) or another live task of
+-- the same owner (or, for an ownerless task, another ownerless one) has title; then it changes
+-- nothing (0 rows). Two checks, not one with IS NOT DISTINCT FROM, which no index serves: each is a
+-- lookup in tasks_title_key instead of a scan of the table for every task changed.
+-- name: SetTaskTitleUnlessTaken :execrows
+UPDATE tasks t
+SET title = sqlc.arg('title'),
+    updated_at = now()
+WHERE t.id = sqlc.arg('id')
+  AND t.title = sqlc.arg('old_title')
+  AND t.deleted_at IS NULL
+  AND NOT EXISTS (
+    SELECT 1
+    FROM tasks other
+    WHERE other.owner_id = t.owner_id
+      AND other.title = sqlc.arg('title')
+      AND other.id <> t.id
+      AND other.deleted_at IS NULL
+  )
+  AND NOT (
+    t.owner_id IS NULL
+    AND EXISTS (
+      SELECT 1
+      FROM tasks other
+      WHERE other.owner_id IS NULL
+        AND other.title = sqlc.arg('title')
+        AND other.id <> t.id
+        AND other.deleted_at IS NULL
+    )
+  );
+
+-- TaskHasTitle says whether a task is live and still titled title.
+-- name: TaskHasTitle :one
+SELECT EXISTS (
+  SELECT 1
+  FROM tasks
+  WHERE id = sqlc.arg('id')
+    AND title = sqlc.arg('title')
+    AND deleted_at IS NULL
+);

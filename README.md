@@ -73,6 +73,14 @@ jobs. Keep both, one or neither: see [Choose what you need](#choose-what-you-nee
 | `internal/testredis` | a Valkey connection for tests, on a database the app never uses |
 
 <!-- remove:end -->
+### One-off commands
+
+| Path | What |
+|---|---|
+| `cmd/oneoff` | runs data fixes and backfills by hand, a dry run unless `--apply`: `go run ./cmd/oneoff` lists them |
+| `internal/oneoff` | each command, and what every run gets: transactions undone in a dry run, a run ID, one summary line |
+| `docs/standards/commands.md` | [the rules for one-off commands](docs/standards/commands.md) |
+
 ## Prerequisites
 
 - Go 1.21 or newer (`make` downloads the exact version in `go.mod`)
@@ -187,6 +195,9 @@ tests), then remove tasks, in one go with your first table:
      (`internal/worker/purge.go`), whose purge every soft-deleted table needs. The purge's tests
      (`internal/worker/purge_test.go`) seed tasks: seed your table instead.
    <!-- remove:end -->
+   - The example one-off command: `rm internal/oneoff/trim_task_titles.go
+     internal/oneoff/trim_task_titles_test.go`, and its line in `Commands()`
+     (`internal/oneoff/commands.go`).
 2. In `db/schema.sql`, replace the `tasks` table and indexes with your own table; put its queries in
    `db/queries/<feature>.sql`. In `sqlc.yaml`, replace `tasks` with your table in the soft-delete
    rule's list (or empty the list if nothing is soft deleted).
@@ -246,7 +257,10 @@ Build the images with `make image` (on an arm64 Mac, for amd64 servers:
 1. Run the migrate image once, with the database's `DATABASE_URL`:
    `docker run --rm -e DATABASE_URL=... <name>-migrate`. Migrations must work with the app
    version still running ([why](docs/standards/database.md#migrations-that-are-safe-while-the-old-app-runs)).
-2. Start each program's new image with its settings in the environment (`.example.env` lists them;
+2. Run any one-off command the release needs with the oneoff image, a dry run first:
+   `docker run --rm -e DATABASE_URL=... <name>-oneoff <command>`, then again with `--apply`
+   ([commands.md](docs/standards/commands.md)).
+3. Start each program's new image with its settings in the environment (`.example.env` lists them;
    each program's `settings.go` says which it reads, and `APP_ENV` defaults to `production`). There
    is no `.env` in the images.
 

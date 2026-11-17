@@ -269,6 +269,49 @@ func (q *Queries) ListTasksAfter(ctx context.Context, arg ListTasksAfterParams) 
 	return items, nil
 }
 
+const listTasksByIDAfter = `-- name: ListTasksByIDAfter :many
+SELECT id, owner_id, title
+FROM tasks
+WHERE id > $1::uuid
+  AND deleted_at IS NULL
+ORDER BY id
+LIMIT $2
+`
+
+type ListTasksByIDAfterParams struct {
+	After    uuid.UUID
+	RowLimit int32
+}
+
+type ListTasksByIDAfterRow struct {
+	ID      uuid.UUID
+	OwnerID *uuid.UUID
+	Title   string
+}
+
+// ListTasksByIDAfter pages through every live task in ID order, for one-off commands that check
+// each one: an ID's order never changes, so a page ends where the next begins even when nothing
+// was changed (a dry run).
+func (q *Queries) ListTasksByIDAfter(ctx context.Context, arg ListTasksByIDAfterParams) ([]ListTasksByIDAfterRow, error) {
+	rows, err := q.db.Query(ctx, listTasksByIDAfter, arg.After, arg.RowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListTasksByIDAfterRow
+	for rows.Next() {
+		var i ListTasksByIDAfterRow
+		if err := rows.Scan(&i.ID, &i.OwnerID, &i.Title); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const purgeDeletedTasks = `-- name: PurgeDeletedTasks :execrows
 DELETE FROM tasks
 WHERE deleted_at < now() - $1::bigint * interval '1 day'
@@ -312,6 +355,76 @@ func (q *Queries) RestoreTask(ctx context.Context, arg RestoreTaskParams) (Task,
 		&i.OwnerID,
 	)
 	return i, err
+}
+
+const setTaskTitleUnlessTaken = `-- name: SetTaskTitleUnlessTaken :execrows
+UPDATE tasks t
+SET title = $1,
+    updated_at = now()
+WHERE t.id = $2
+  AND t.title = $3
+  AND t.deleted_at IS NULL
+  AND NOT EXISTS (
+    SELECT 1
+    FROM tasks other
+    WHERE other.owner_id = t.owner_id
+      AND other.title = $1
+      AND other.id <> t.id
+      AND other.deleted_at IS NULL
+  )
+  AND NOT (
+    t.owner_id IS NULL
+    AND EXISTS (
+      SELECT 1
+      FROM tasks other
+      WHERE other.owner_id IS NULL
+        AND other.title = $1
+        AND other.id <> t.id
+        AND other.deleted_at IS NULL
+    )
+  )
+`
+
+type SetTaskTitleUnlessTakenParams struct {
+	Title    string
+	ID       uuid.UUID
+	OldTitle string
+}
+
+// SetTaskTitleUnlessTaken changes a live task's title from old_title to title, unless it no longer
+// has old_title (changed since it was read, by the apps that keep running) or another live task of
+// the same owner (or, for an ownerless task, another ownerless one) has title; then it changes
+// nothing (0 rows). Two checks, not one with IS NOT DISTINCT FROM, which no index serves: each is a
+// lookup in tasks_title_key instead of a scan of the table for every task changed.
+func (q *Queries) SetTaskTitleUnlessTaken(ctx context.Context, arg SetTaskTitleUnlessTakenParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setTaskTitleUnlessTaken, arg.Title, arg.ID, arg.OldTitle)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const taskHasTitle = `-- name: TaskHasTitle :one
+SELECT EXISTS (
+  SELECT 1
+  FROM tasks
+  WHERE id = $1
+    AND title = $2
+    AND deleted_at IS NULL
+)
+`
+
+type TaskHasTitleParams struct {
+	ID    uuid.UUID
+	Title string
+}
+
+// TaskHasTitle says whether a task is live and still titled title.
+func (q *Queries) TaskHasTitle(ctx context.Context, arg TaskHasTitleParams) (bool, error) {
+	row := q.db.QueryRow(ctx, taskHasTitle, arg.ID, arg.Title)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
 }
 
 const updateTask = `-- name: UpdateTask :one

@@ -18,7 +18,7 @@ HASH := \#
 export DATABASE_URL ?= $(shell sed -nE 's/^(export[[:space:]]+)?DATABASE_URL=//p' .env 2>/dev/null | tail -n 1 \
 	| sed -E -e "s/^\"([^\"]*)\".*/\1/;t" -e "s/^'([^']*)'.*/\1/;t" -e "s/[[:space:]]+$(HASH).*//" -e "s/[[:space:]]+$$//")
 
-.PHONY: fmt lint test test-db-clean vuln build rename image image-migrate db-up db-down \
+.PHONY: fmt lint test test-db-clean vuln build rename image image-migrate image-oneoff db-up db-down \
 	telemetry-up telemetry-down generate check-generated check-versions migrate-diff migrate-apply
 
 fmt:
@@ -78,6 +78,11 @@ image: image-migrate
 
 image-migrate:
 	docker build --target migrate -t $(IMAGE)-migrate .
+
+image: image-oneoff
+
+image-oneoff:
+	docker build --build-arg VERSION=$$(git describe --always --dirty) --target oneoff -t $(IMAGE)-oneoff .
 
 # remove:api
 .PHONY: image-api run dev-token
