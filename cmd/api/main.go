@@ -79,7 +79,7 @@ func run() error {
 	// Last, after the server and connections close, so their final numbers and spans are sent too.
 	defer providers.Flush(log.Logger)
 
-	pool, err := startup.ConnectDB(ctx, cfg.databaseURL, providers.Meters, providers.Tracers)
+	pool, err := startup.ConnectDB(ctx, cfg.databaseURL, cfg.dbLimits, providers.Meters, providers.Tracers)
 	if err != nil {
 		return err
 	}

@@ -228,7 +228,8 @@ to follow, not code that's checked):
 
 1. Make a context that ends on SIGINT or SIGTERM (`signal.NotifyContext`).
 2. Load `.env` (`config.Env()`) and read the settings; stop with every problem in one error.
-3. Set up the logger (`startup.SetupLogger`), then connect (`startup.ConnectDB`), closing each
+3. Set up the logger (`startup.SetupLogger`), then connect (`startup.ConnectDB`, with
+   [time limits](docs/standards/database.md#time-limits) fit for its work), closing each
    connection on the way out.
 4. Do its work until the context ends, then stop within the time the platform gives between
    SIGTERM and a hard kill (Docker: 10 s by default; Kubernetes and ECS: 30 s).

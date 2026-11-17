@@ -4,10 +4,12 @@ import (
 	"errors"
 	"net/netip"
 	"net/url"
+	"time"
 
 	"github.com/mdayat/go-template/internal/api"
 	"github.com/mdayat/go-template/internal/auth/jwks"
 	"github.com/mdayat/go-template/internal/config"
+	"github.com/mdayat/go-template/internal/startup"
 )
 
 // settings are what the API reads at startup; .example.env describes each.
@@ -15,6 +17,7 @@ type settings struct {
 	app         config.App
 	httpAddr    string
 	databaseURL string
+	dbLimits    startup.DBLimits
 	auth        jwks.Config // whose sign-in tokens to accept
 	limits      api.Limits  // all but Limiter, which run sets
 	redisURL    string      // the Valkey that every copy of the API shares
@@ -28,6 +31,13 @@ func loadSettings(sources ...config.Source) (settings, error) {
 		app:         r.App(),
 		httpAddr:    r.String("HTTP_ADDR", ":8080"),
 		databaseURL: r.Required("DATABASE_URL"),
+		// Above api.RequestTimeout, so a slow request gets the API's own 503 and its query is
+		// cancelled with it; these catch what that cancel misses. No request needs a transaction open
+		// longer.
+		dbLimits: startup.DBLimits{
+			Statement:         r.Duration("DB_STATEMENT_TIMEOUT", 10*time.Second),
+			IdleInTransaction: r.Duration("DB_IDLE_IN_TRANSACTION_TIMEOUT", 10*time.Second),
+		},
 		auth: jwks.Config{
 			KeysURL:  r.Required("AUTH_JWKS_URL"),
 			Issuer:   r.Required("AUTH_ISSUER"),

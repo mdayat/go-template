@@ -5,8 +5,10 @@ package startup
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"time"
 
@@ -66,16 +68,56 @@ func Version(buildVersion string) string {
 	return revision
 }
 
-// ConnectDB returns a pool on url once a connection works, so a wrong URL fails at startup. It
-// records to meters, from the app's side: each query's time (by its sqlc name), and the pool's use
-// (connections in use and idle, waits for a free one), which the database itself can't see. Each
-// query in a traced request or job is a span in tracers ("query GetTask"), with its SQL but not
-// its values (a failed query's error message can quote one).
-func ConnectDB(ctx context.Context, url string, meters metric.MeterProvider, tracers trace.TracerProvider) (*pgxpool.Pool, error) {
+// DBLimits are Postgres's own time limits on each of a pool's connections. When a context ends, pgx
+// already asks Postgres to stop the query; these stop what that can't reach: a query or transaction
+// left running when the program is killed, or when the cancel request is lost on the network.
+type DBLimits struct {
+	// Statement is the longest one statement may run (statement_timeout); Postgres then cancels it.
+	Statement time.Duration
+	// IdleInTransaction is the longest a transaction may stay open with nothing running
+	// (idle_in_transaction_session_timeout), holding its locks; Postgres then ends the connection,
+	// which rolls the transaction back.
+	IdleInTransaction time.Duration
+}
+
+// ConnectDB returns a pool on url once a connection works, so a wrong URL fails at startup. Every
+// connection has limits, and url must not set them too. It records to meters, from the app's side:
+// each query's time (by its sqlc name), and the pool's use (connections in use and idle, waits for
+// a free one), which the database itself can't see. Each query in a traced request or job is a span
+// in tracers ("query GetTask"), with its SQL but not its values (a failed query's error message can
+// quote one).
+func ConnectDB(ctx context.Context, url string, limits DBLimits, meters metric.MeterProvider, tracers trace.TracerProvider) (*pgxpool.Pool, error) {
 	cfg, err := pgxpool.ParseConfig(url)
 	if err != nil {
 		// pgx's parse error leaves the password out.
 		return nil, fmt.Errorf("read DATABASE_URL: %w", err)
+	}
+	params := cfg.ConnConfig.RuntimeParams
+	// Postgres matches a setting's name ignoring case, and in options takes --statement-timeout=...
+	// as -c statement_timeout=...
+	options := strings.ReplaceAll(strings.ToLower(params["options"]), "-", "_")
+	for _, l := range []struct {
+		name, setting string
+		value         time.Duration
+	}{
+		{"statement_timeout", "DB_STATEMENT_TIMEOUT", limits.Statement},
+		{"idle_in_transaction_session_timeout", "DB_IDLE_IN_TRANSACTION_TIMEOUT", limits.IdleInTransaction},
+	} {
+		// 0 would be no limit; Postgres refuses more than its largest whole number of milliseconds.
+		if l.value < time.Millisecond || l.value.Milliseconds() > math.MaxInt32 {
+			return nil, fmt.Errorf("%s must be from 1ms to 596h, got %v", l.setting, l.value)
+		}
+		// One value in two places means one is silently ignored. The error doesn't quote the URL: it
+		// holds a password.
+		set := strings.Contains(options, l.name)
+		for k := range params {
+			set = set || strings.EqualFold(k, l.name)
+		}
+		if set {
+			return nil, fmt.Errorf("DATABASE_URL (or PGOPTIONS, or a service file) sets %s: set %s instead", l.name, l.setting)
+		}
+		// Postgres reads a number without a unit as milliseconds.
+		params[l.name] = strconv.FormatInt(l.value.Milliseconds(), 10)
 	}
 	cfg.ConnConfig.Tracer = otelpgx.NewTracer(
 		otelpgx.WithMeterProvider(meters),

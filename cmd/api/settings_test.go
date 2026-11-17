@@ -3,6 +3,7 @@ package main
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/rs/zerolog"
@@ -10,6 +11,7 @@ import (
 	"github.com/mdayat/go-template/internal/api"
 	"github.com/mdayat/go-template/internal/auth/jwks"
 	"github.com/mdayat/go-template/internal/config"
+	"github.com/mdayat/go-template/internal/startup"
 )
 
 // Pins the names, defaults and required settings that deploys and .example.env rely on.
@@ -30,6 +32,7 @@ func TestLoadSettings(t *testing.T) {
 		app:         config.App{Env: config.EnvProduction, LogLevel: zerolog.InfoLevel},
 		httpAddr:    ":8080",
 		databaseURL: "postgres://localhost/app",
+		dbLimits:    startup.DBLimits{Statement: 10 * time.Second, IdleInTransaction: 10 * time.Second},
 		auth: jwks.Config{
 			KeysURL: "https://keys.example.com/jwks.json", Issuer: "https://issuer.example.com", Audience: "app",
 		},
@@ -50,9 +53,15 @@ func TestLoadSettings(t *testing.T) {
 		"TRUSTED_PROXIES":     "10.0.0.0/8,2001:db8::/32",
 		"RATE_LIMIT_PER_IP":   "0",
 		"RATE_LIMIT_PER_USER": "30",
+
+		"DB_STATEMENT_TIMEOUT":           "30s",
+		"DB_IDLE_IN_TRANSACTION_TIMEOUT": "2s",
 	})
 	if err != nil || got.httpAddr != ":9090" {
 		t.Errorf("loadSettings() httpAddr = %q, error = %v; want :9090, nil", got.httpAddr, err)
+	}
+	if want := (startup.DBLimits{Statement: 30 * time.Second, IdleInTransaction: 2 * time.Second}); got.dbLimits != want {
+		t.Errorf("loadSettings() dbLimits = %+v, want %+v", got.dbLimits, want)
 	}
 	wantLimits := api.Limits{TrustedProxies: []string{"10.0.0.0/8", "2001:db8::/32"}, PerIP: 0, PerUser: 30}
 	if diff := cmp.Diff(wantLimits, got.limits); diff != "" {

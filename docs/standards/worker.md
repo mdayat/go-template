@@ -95,7 +95,9 @@ asynq keeps whole seconds, cutting off the rest, and replaces a zero limit with 
 default. The handler's context
 ends at the limit, so pass `ctx` to everything it calls, as in a request. A job past its limit
 counts as failed; asynq retries it while attempts are left, whatever the handler then returns (an
-`apperr` kind included).
+`apperr` kind included). A limit over 5 minutes also needs the worker's `DB_STATEMENT_TIMEOUT`
+default raised to match ([database.md](database.md#time-limits)), or Postgres cuts the job's long
+statements first.
 
 On SIGTERM the worker stops its scheduler, stops taking jobs, and gives running ones 8 s to finish
 (`ShutdownTimeout` in `internal/worker/worker.go`, below Docker's default 10 s before a hard

@@ -12,6 +12,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/joho/godotenv"
 	"github.com/rs/zerolog"
@@ -141,6 +142,22 @@ func (r *Reader) Count(key string, fallback int) int {
 		return fallback
 	}
 	return n
+}
+
+// Duration returns the setting key, a length of time above 0 in whole milliseconds, written as Go
+// writes durations (500ms, 10s, 5m, 1h30m), or fallback if no source has it. A value that isn't one
+// is recorded as a problem.
+func (r *Reader) Duration(key string, fallback time.Duration) time.Duration {
+	v := r.lookup(key)
+	if v == "" {
+		return fallback
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil || d <= 0 || d%time.Millisecond != 0 {
+		r.errs = append(r.errs, fmt.Errorf("%s must be a length of time above 0 like 500ms, 10s or 5m, in whole milliseconds", key))
+		return fallback
+	}
+	return d
 }
 
 // IPRanges returns the setting key, a comma-separated list of IP ranges in CIDR form (10.0.0.0/8,

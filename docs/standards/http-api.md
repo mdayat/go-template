@@ -249,4 +249,6 @@ An endpoint that needs longer itself (a large upload) sets its own limits in tha
 higher limit for everyone:
 `context.WithTimeout(context.WithoutCancel(r.Context()), d)` (a context made from `r.Context()`
 alone can't outlive its 8 s; this one also no longer stops when the client leaves), and
-`http.ResponseController` for the write deadline.
+`http.ResponseController` for the write deadline. Its queries still stop at `DB_STATEMENT_TIMEOUT`:
+raise that in its transaction alone
+([database.md](database.md#time-limits)).

@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/rs/zerolog"
 )
@@ -250,6 +251,37 @@ func TestCount(t *testing.T) {
 
 		if got != tt.want || (err == nil) != tt.wantOK {
 			t.Errorf("Count(%q) = %d, error %v; want %d, ok = %v", tt.value, got, err, tt.want, tt.wantOK)
+		}
+	}
+}
+
+func TestDuration(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		value  string
+		want   time.Duration
+		wantOK bool
+	}{
+		{"", 7 * time.Second, true},
+		{"500ms", 500 * time.Millisecond, true},
+		{"5m", 5 * time.Minute, true},
+		{"1h30m", 90 * time.Minute, true},
+		{"0", 7 * time.Second, false},
+		{"0s", 7 * time.Second, false},
+		{"-1s", 7 * time.Second, false},
+		{"1500us", 7 * time.Second, false},
+		{"10", 7 * time.Second, false},
+		{"ten seconds", 7 * time.Second, false},
+	}
+	for _, tt := range tests {
+		r := NewReader(Map{"WAIT": tt.value})
+
+		got := r.Duration("WAIT", 7*time.Second)
+		err := r.Err()
+
+		if got != tt.want || (err == nil) != tt.wantOK {
+			t.Errorf("Duration(%q) = %v, error %v; want %v, ok = %v", tt.value, got, err, tt.want, tt.wantOK)
 		}
 	}
 }

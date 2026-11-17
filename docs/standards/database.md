@@ -113,6 +113,50 @@ A deleted row is still in the table, so every rule below exists to keep it out o
 Soft delete keeps only a row's last state. To know who changed what and when, keep a separate
 history (audit) table.
 
+## Time limits
+
+When a request or job runs out of time, its context ends and pgx asks Postgres to stop the query.
+That request can't be sent when the program is killed outright, or arrive when the network drops,
+and the query then runs on, holding its locks. So every connection `startup.ConnectDB` opens also
+has Postgres's own limits, set by two settings:
+
+| Setting | Postgres's name | What it stops |
+|---|---|---|
+| `DB_STATEMENT_TIMEOUT` | `statement_timeout` | one statement running longer; it fails with `57014`, an unexpected error to the caller |
+| `DB_IDLE_IN_TRANSACTION_TIMEOUT` | `idle_in_transaction_session_timeout` | a transaction open with nothing running for longer; Postgres ends the connection, which rolls it back |
+
+Each program sets its own defaults in `settings.go`, to fit its work:
+
+<!-- remove:api -->
+- **API**: 10 s and 10 s. Above the 8 s a request may take, so a slow request gets the API's own
+  reply ([http-api.md](http-api.md#server-settings)), and its query is cancelled with it.
+<!-- remove:end -->
+<!-- remove:worker -->
+- **worker**: 5 min, at least the longest job's time limit, so no job's statement is cut before
+  its job is; and 1 min.
+<!-- remove:end -->
+
+A value is a duration (`500ms`, `10s`, `5m`) in whole milliseconds, from 1 ms to 596 hours: 0
+is no limit in Postgres. Set them only through these settings: a program refuses to start if
+`DATABASE_URL` or `PGOPTIONS` sets either, as one of the two values would be ignored.
+
+The values a program sends when it connects beat any set on the database or its user (`ALTER
+ROLE ... SET statement_timeout`): set them through these settings, not there. Behind a pooler
+(PgBouncer, RDS Proxy, Supavisor), check it passes them on. PgBouncer refuses them at connect time
+unless listed in its `ignore_startup_parameters`, and then drops them: the settings have no effect,
+so set the limits on the database user instead (`ALTER ROLE api_user SET statement_timeout =
+'10s'`), a user per program, so each keeps its own values, and another for migrations, which
+mustn't get them.
+
+One transaction that needs longer raises the limit for itself alone, as its first statement:
+`SET LOCAL statement_timeout = '60s'` (or `idle_in_transaction_session_timeout`). It ends with the
+transaction; a plain `SET` would stay on the pooled connection for whoever uses it next.
+
+Migrations and your own `psql` sessions don't go through `ConnectDB`, so they have no limit. A
+migration may rightly run long (`CREATE INDEX CONCURRENTLY`). In a `psql` session on a shared
+database, run `SET statement_timeout = '30s';` first: closing the terminal doesn't stop a query
+already running.
+
 ## Transactions and retries
 
 A service that needs several statements to succeed or fail together runs them in one
