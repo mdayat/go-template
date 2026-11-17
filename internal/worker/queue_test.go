@@ -3,17 +3,23 @@ package worker
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"maps"
 	"testing"
 	"time"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/rs/zerolog"
+	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/metric/noop"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/trace"
+	tracenoop "go.opentelemetry.io/otel/trace/noop"
 
 	"github.com/mdayat/go-template/internal/apperr"
 	"github.com/mdayat/go-template/internal/queue"
 	"github.com/mdayat/go-template/internal/queue/valkey"
+	"github.com/mdayat/go-template/internal/spantest"
 	"github.com/mdayat/go-template/internal/testqueue"
 	"github.com/mdayat/go-template/internal/testredis"
 )
@@ -39,12 +45,23 @@ type queuedRun struct {
 // queues one job.
 func runOnQueue(t *testing.T, handler queue.Handler, maxRetries int, timeout time.Duration) queuedRun {
 	t.Helper()
+	off := tracenoop.NewTracerProvider()
+	return runTracedOnQueue(t.Context(), t, off, off, handler, maxRetries, timeout)
+}
+
+// runTracedOnQueue is runOnQueue with the job queued in ctx's trace, traced to queueing, and run
+// traced to running.
+func runTracedOnQueue(
+	ctx context.Context, t *testing.T, queueing, running trace.TracerProvider,
+	handler queue.Handler, maxRetries int, timeout time.Duration,
+) queuedRun {
+	t.Helper()
 	client := testredis.New(t)
 	queueName := testqueue.NewQueue(t, client)
 	lines := make(lineWriter, 10)
 
 	mux := queue.NewMux()
-	mux.Use(logJobs(zerolog.New(lines), noop.Float64Histogram{}))
+	mux.Use(logJobs(zerolog.New(lines), noop.Float64Histogram{}, running.Tracer("")))
 	mux.Handle("test:job", handler)
 	server, err := valkey.NewServer(client, mux, valkey.ServerOptions{
 		Queues: []string{queueName}, ShutdownTimeout: time.Second, Logger: zerolog.Nop(),
@@ -58,7 +75,7 @@ func runOnQueue(t *testing.T, handler queue.Handler, maxRetries int, timeout tim
 	t.Cleanup(server.Shutdown)
 
 	job := queue.Job{Type: "test:job", Queue: queueName, Timeout: timeout, MaxRetries: maxRetries}
-	id, err := valkey.NewEnqueuer(client).Enqueue(t.Context(), job)
+	id, err := valkey.NewEnqueuer(client, queueing).Enqueue(ctx, job)
 	if err != nil {
 		t.Fatalf("queue job: %v", err)
 	}
@@ -160,5 +177,87 @@ func TestLogJobsOnTheQueueCutOffByShutdown(t *testing.T) {
 	}
 	if diff := cmp.Diff(want, withStandIns(got)); diff != "" {
 		t.Errorf("log line mismatch (-want +got):\n%s", diff)
+	}
+}
+
+// A job queued inside a request's trace runs in that trace: the request queues it ("send"), the
+// worker runs it ("process") under that, and the run's log line names the trace. A failed run's
+// span is marked failed.
+func TestTraceFollowsTheJob(t *testing.T) {
+	t.Parallel()
+	spans := spantest.New()
+	ctx, request := spans.Provider.Tracer("test").Start(t.Context(), "POST /task-purges",
+		trace.WithSpanKind(trace.SpanKindServer))
+	failing := func(context.Context, []byte) error { return errors.New("webhook down") }
+
+	run := runTracedOnQueue(ctx, t, spans.Provider, spans.Provider, failing, 0, 10*time.Second)
+	request.End()
+	line := firstLine(t, run)
+
+	process := waitForSpan(t, spans, "process test:job")
+	send := spans.Named("send test:job")
+	if len(send) != 1 || send[0].SpanKind() != trace.SpanKindProducer || send[0].Parent().SpanID() != request.SpanContext().SpanID() {
+		t.Fatalf("spans = %q, want a producer send test:job under the request", spans.Names())
+	}
+	if process.SpanKind() != trace.SpanKindConsumer || process.Parent().SpanID() != send[0].SpanContext().SpanID() ||
+		process.SpanContext().TraceID() != request.SpanContext().TraceID() {
+		t.Errorf("process span: kind %v, parent %v; want a consumer under send, in the request's trace",
+			process.SpanKind(), process.Parent())
+	}
+	if process.Status().Code != codes.Error || spantest.Attributes(process)["job.result"] != "failed" {
+		t.Errorf("process span status %v, attributes %v; want failed", process.Status(), spantest.Attributes(process))
+	}
+	if trace, _ := line["trace"].(map[string]any); trace["id"] != request.SpanContext().TraceID().String() {
+		t.Errorf("log line trace = %v, want the request's trace %s", line["trace"], request.SpanContext().TraceID())
+	}
+}
+
+// A job queued outside any trace (a script, or a request whose trace wasn't recorded, which
+// valkey's TestEnqueueCarriesOnlyKeptTraces shows sends none) starts its own when it runs.
+func TestTraceStartsWithTheJob(t *testing.T) {
+	t.Parallel()
+	spans := spantest.New()
+	succeed := func(context.Context, []byte) error { return nil }
+
+	run := runTracedOnQueue(t.Context(), t, tracenoop.NewTracerProvider(), spans.Provider, succeed, 0, 10*time.Second)
+	firstLine(t, run)
+
+	if process := waitForSpan(t, spans, "process test:job"); process.Parent().IsValid() {
+		t.Errorf("parent = %v, want none: nothing traced queued the job", process.Parent())
+	}
+}
+
+// waitForSpan returns the span called name once it has ended: a run's span ends just after its
+// log line.
+//
+//nolint:ireturn // the SDK hands out ended spans as an interface
+func waitForSpan(t *testing.T, spans *spantest.Recorder, name string) sdktrace.ReadOnlySpan {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if found := spans.Named(name); len(found) > 0 {
+			return found[0]
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no span %q; spans = %q", name, spans.Names())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// With the worker's traces off, a job queued in a trace logs no trace: the IDs would be the
+// queueing request's, not the run's.
+func TestTraceOffLogsNoTrace(t *testing.T) {
+	t.Parallel()
+	spans := spantest.New()
+	ctx, request := spans.Provider.Tracer("test").Start(t.Context(), "POST /task-purges",
+		trace.WithSpanKind(trace.SpanKindServer))
+	defer request.End()
+	succeed := func(context.Context, []byte) error { return nil }
+
+	run := runTracedOnQueue(ctx, t, spans.Provider, tracenoop.NewTracerProvider(), succeed, 0, 10*time.Second)
+
+	if line := firstLine(t, run); line["trace"] != nil || line["span"] != nil {
+		t.Errorf("log line has trace %v, span %v; want neither", line["trace"], line["span"])
 	}
 }

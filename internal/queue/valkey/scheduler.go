@@ -1,6 +1,7 @@
 package valkey
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"time"
@@ -27,7 +28,8 @@ func NewScheduler(client *redis.Client, logger zerolog.Logger, schedules []queue
 		if s.Unique < time.Second || s.Unique%time.Second != 0 {
 			return nil, fmt.Errorf("schedule %s: unique %s is not a whole number of seconds", s.Job.Type, s.Unique)
 		}
-		task, err := newTask(s.Job)
+		// No trace to join: each run of a scheduled job starts its own.
+		task, err := newTask(context.Background(), s.Job)
 		if err != nil {
 			return nil, fmt.Errorf("schedule %s: %w", s.Job.Type, err)
 		}

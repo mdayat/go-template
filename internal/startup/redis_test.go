@@ -5,15 +5,17 @@ import (
 	"context"
 	"encoding/json"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
-	"go.opentelemetry.io/otel/metric/noop"
-
 	"github.com/google/go-cmp/cmp"
 	"github.com/rs/zerolog"
+	"go.opentelemetry.io/otel/metric/noop"
+	tracenoop "go.opentelemetry.io/otel/trace/noop"
 
 	"github.com/mdayat/go-template/internal/metrictest"
+	"github.com/mdayat/go-template/internal/spantest"
 	"github.com/mdayat/go-template/internal/testenv"
 )
 
@@ -85,7 +87,7 @@ func TestRedisFailFastEndsWithTheRequest(t *testing.T) {
 			t.Cleanup(func() { _ = conn.Close() })
 		}
 	}()
-	client, err := RedisFailFast("redis://"+listener.Addr().String()+"/0", 5*time.Second, "test", noop.NewMeterProvider())
+	client, err := RedisFailFast("redis://"+listener.Addr().String()+"/0", 5*time.Second, "test", noop.NewMeterProvider(), tracenoop.NewTracerProvider())
 	if err != nil {
 		t.Fatalf("RedisFailFast() error = %v", err)
 	}
@@ -128,7 +130,7 @@ func TestRedisFailFastDialsOnce(t *testing.T) {
 // must not need Valkey.
 func pingFailFast(t *testing.T, addr string) (time.Duration, error) {
 	t.Helper()
-	client, err := RedisFailFast("redis://"+addr+"/0", 100*time.Millisecond, "test", noop.NewMeterProvider())
+	client, err := RedisFailFast("redis://"+addr+"/0", 100*time.Millisecond, "test", noop.NewMeterProvider(), tracenoop.NewTracerProvider())
 	if err != nil {
 		t.Fatalf("RedisFailFast() error = %v", err)
 	}
@@ -147,7 +149,7 @@ func TestConnectRedisRecordsMetrics(t *testing.T) {
 		t.Fatal(err)
 	}
 	rec := metrictest.New()
-	client, err := ConnectRedis(t.Context(), url, "queue", rec.Provider)
+	client, err := ConnectRedis(t.Context(), url, "queue", rec.Provider, tracenoop.NewTracerProvider())
 	if err != nil {
 		t.Fatalf("ConnectRedis() error = %v", err)
 	}
@@ -161,6 +163,43 @@ func TestConnectRedisRecordsMetrics(t *testing.T) {
 	for _, name := range []string{"db.client.connections.use_time", "db.client.connections.usage"} {
 		if len(got.Find(name, map[string]string{"pool.name": "queue"})) == 0 {
 			t.Errorf("no %s for pool queue; recorded %v", name, got.Names())
+		}
+	}
+}
+
+// Each command is a span named by the command, under the request or job that sent it, never with
+// its arguments: a queued job's payload is one.
+func TestConnectRedisTraces(t *testing.T) {
+	t.Parallel()
+	url, err := testenv.Get("TEST_REDIS_URL")
+	if err != nil {
+		t.Fatal(err)
+	}
+	spans := spantest.New()
+	client, err := ConnectRedis(t.Context(), url, "queue", noop.NewMeterProvider(), spans.Provider)
+	if err != nil {
+		t.Fatalf("ConnectRedis() error = %v", err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	ctx, parent := spans.Provider.Tracer("test").Start(t.Context(), "job")
+
+	key := "spantest:" + t.Name()
+	if err := client.Set(ctx, key, "personal-data", time.Minute).Err(); err != nil {
+		t.Fatal(err)
+	}
+	parent.End()
+
+	set := spans.Named("set")
+	if len(set) != 1 || set[0].Parent().SpanID() != parent.SpanContext().SpanID() {
+		t.Fatalf("spans = %q, want one set under the job", spans.Names())
+	}
+	attrs := spantest.Attributes(set[0])
+	if attrs["db.client.connection.pool.name"] != "queue" {
+		t.Errorf("attributes = %v, want db.client.connection.pool.name queue", attrs)
+	}
+	for k, v := range attrs {
+		if strings.Contains(v, "personal-data") {
+			t.Errorf("attribute %s = %q holds the command's arguments", k, v)
 		}
 	}
 }

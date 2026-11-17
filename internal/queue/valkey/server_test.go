@@ -10,6 +10,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/hibiken/asynq"
 	"github.com/rs/zerolog"
+	tracenoop "go.opentelemetry.io/otel/trace/noop"
 
 	"github.com/mdayat/go-template/internal/queue"
 	"github.com/mdayat/go-template/internal/testqueue"
@@ -66,7 +67,7 @@ func startJob(t *testing.T, handler queue.Handler, maxRetries int, timeout time.
 	t.Cleanup(server.Shutdown)
 
 	job := queue.Job{Type: "test:job", Queue: queueName, Timeout: timeout, MaxRetries: maxRetries}
-	id, err := NewEnqueuer(client).Enqueue(t.Context(), job)
+	id, err := NewEnqueuer(client, tracenoop.NewTracerProvider()).Enqueue(t.Context(), job)
 	if err != nil {
 		t.Fatalf("queue job: %v", err)
 	}

@@ -10,11 +10,12 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/rs/zerolog"
 	"go.opentelemetry.io/otel/metric/noop"
+	tracenoop "go.opentelemetry.io/otel/trace/noop"
 )
 
 func TestHealthzAnswersGetAndHead(t *testing.T) {
 	t.Parallel()
-	router := newBaseRouter(zerolog.Nop(), noop.NewMeterProvider(), nil)
+	router := newBaseRouter(zerolog.Nop(), noop.NewMeterProvider(), tracenoop.NewTracerProvider(), nil)
 
 	for _, method := range []string{http.MethodGet, http.MethodHead} {
 		rec := httptest.NewRecorder()

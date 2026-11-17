@@ -1,11 +1,16 @@
-// Package telemetry sets up a program's metrics with OpenTelemetry: where they go is decided by the
-// standard OTEL_* settings, read by OpenTelemetry itself, so changing where they're stored (a
-// collector, Prometheus, a vendor) changes no code.
+// Package telemetry sets up a program's metrics and traces with OpenTelemetry: where they go is
+// decided by the standard OTEL_* settings, read by OpenTelemetry itself, so changing where they're
+// stored (a collector, Prometheus, Jaeger, a vendor) changes no code. Both are on unless set to
+// "none".
 //
-//   - OTEL_METRICS_EXPORTER: "otlp" pushes them (OTEL_EXPORTER_OTLP_ENDPOINT, every
+//   - OTEL_METRICS_EXPORTER: "otlp" (the default) pushes them (OTEL_EXPORTER_OTLP_ENDPOINT, every
 //     OTEL_METRIC_EXPORT_INTERVAL ms, default 60000); "prometheus" serves them for pulling at
 //     http://OTEL_EXPORTER_PROMETHEUS_HOST:OTEL_EXPORTER_PROMETHEUS_PORT/metrics (default
-//     localhost:9464); unset or "none" turns metrics off.
+//     localhost:9464); "none" turns metrics off.
+//   - OTEL_TRACES_EXPORTER: "otlp" (the default) pushes traces to OTEL_EXPORTER_OTLP_ENDPOINT;
+//     "none" turns them off. OTEL_TRACES_SAMPLER_ARG, from 0 to 1 (default 1), is the share of
+//     traces kept.
+//   - OTEL_SDK_DISABLED=true turns both off, as OpenTelemetry's other SDKs read it.
 //   - OTEL_SERVICE_NAME, OTEL_RESOURCE_ATTRIBUTES: override what Start names the program.
 package telemetry
 
@@ -14,10 +19,13 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path"
 	"regexp"
 	"runtime/debug"
+	"strconv"
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -28,14 +36,18 @@ import (
 	"go.opentelemetry.io/otel/metric/noop"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
+	"go.opentelemetry.io/otel/trace"
+	tracenoop "go.opentelemetry.io/otel/trace/noop"
 )
 
-// FlushTimeout is how long Flush may take to send the last metrics: little, as it runs after the
-// program's own shutdown wait, and both must end before the platform's hard kill (Docker: 10 s).
+// FlushTimeout is how long Flush may take to send the last metrics and traces: little, as it runs
+// after the program's own shutdown wait, and both must end before the platform's hard kill
+// (Docker: 10 s).
 const FlushTimeout = time.Second
 
-// Program is what the metrics say about the program sending them.
+// Program is what the metrics and traces say about the program sending them.
 type Program struct {
 	// Name is the program within the project ("api", "worker"); the service is named
 	// "<project>-<Name>", the project being the last part of the module path.
@@ -44,58 +56,169 @@ type Program struct {
 	Env     string // config.App's Env
 }
 
-// Metrics is a program's meter provider: pass Provider to what records metrics, and call Flush on
-// the way out.
-type Metrics struct {
-	Provider metric.MeterProvider
-	shutdown func(context.Context) error
+// Providers are a program's meter and tracer providers: pass them to what records metrics and
+// traces, and call Flush on the way out.
+type Providers struct {
+	Meters   metric.MeterProvider
+	Tracers  trace.TracerProvider
+	shutdown []func(context.Context) error
 }
 
-// Start sets up metrics as the OTEL_* settings say, and starts recording the Go runtime's (memory,
-// goroutines, garbage collection). With metrics off, Provider records nothing, at next to no cost.
-// OpenTelemetry's own errors (a push that failed) go to logger, at warn: the program goes on.
-func Start(ctx context.Context, p Program, logger zerolog.Logger) (*Metrics, error) {
-	off := &Metrics{Provider: noop.NewMeterProvider(), shutdown: func(context.Context) error { return nil }}
-	// Unset is off, not autoexport's default (otlp): pushing to nothing logs an error every minute.
-	switch os.Getenv("OTEL_METRICS_EXPORTER") {
-	case "":
+// Start sets up metrics and traces as the OTEL_* settings say, and starts recording the Go
+// runtime's metrics (memory, goroutines, garbage collection). What's off records nothing, at next to
+// no cost. OpenTelemetry's own errors (a send that failed) go to logger at warn, at most one line a
+// minute: the program goes on, and nowhere to send to isn't worth a line every few seconds.
+func Start(ctx context.Context, p Program, logger zerolog.Logger) (*Providers, error) {
+	// autoexport would print them on stdout, among the JSON log lines.
+	for _, name := range []string{"OTEL_METRICS_EXPORTER", "OTEL_TRACES_EXPORTER"} {
+		if os.Getenv(name) == "console" {
+			return nil, fmt.Errorf("%s=console isn't supported: it mixes telemetry into the log; use otlp or none", name)
+		}
+	}
+	off := &Providers{Meters: noop.NewMeterProvider(), Tracers: tracenoop.NewTracerProvider()}
+	// autoexport doesn't read it.
+	if os.Getenv("OTEL_SDK_DISABLED") == "true" {
 		return off, nil
-	case "console":
-		// autoexport would print the metrics on stdout, among the JSON log lines.
-		return nil, errors.New("OTEL_METRICS_EXPORTER=console isn't supported: it mixes metrics into the log; use otlp or prometheus")
+	}
+	// The sampler is ours (see newSampler), parent-based with OTEL_TRACES_SAMPLER_ARG as its
+	// ratio: the two settings that mean that are accepted (platforms set them); any other would be
+	// silently ignored, so it stops the program instead.
+	switch os.Getenv("OTEL_TRACES_SAMPLER") {
+	case "", "parentbased_traceidratio", "parentbased_always_on":
+	default:
+		return nil, errors.New("OTEL_TRACES_SAMPLER: only parentbased_traceidratio is supported; " +
+			"set OTEL_TRACES_SAMPLER_ARG to the share of traces to keep, or OTEL_TRACES_EXPORTER=none")
+	}
+	ratio, err := sampleRatio()
+	if err != nil {
+		return nil, err
 	}
 	reader, err := autoexport.NewMetricReader(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("set up metrics exporter (OTEL_METRICS_EXPORTER): %w", err)
 	}
-	if autoexport.IsNoneMetricReader(reader) {
+	exporter, err := autoexport.NewSpanExporter(ctx)
+	if err != nil {
+		return nil, errors.Join(fmt.Errorf("set up traces exporter (OTEL_TRACES_EXPORTER): %w", err), reader.Shutdown(ctx))
+	}
+	metricsOn, tracesOn := !autoexport.IsNoneMetricReader(reader), !autoexport.IsNoneSpanExporter(exporter)
+	if !metricsOn && !tracesOn {
 		return off, nil
 	}
-	// Process-wide: OpenTelemetry has one error handler.
-	otel.SetErrorHandler(otel.ErrorHandlerFunc(func(err error) {
-		logger.Warn().Err(err).Str("source", "opentelemetry").Msg("metrics: OpenTelemetry reported an error")
-	}))
+	providers := off
+
 	res, err := newResource(ctx, p)
 	if err != nil {
-		return nil, errors.Join(err, reader.Shutdown(ctx))
+		return nil, errors.Join(err, reader.Shutdown(ctx), exporter.Shutdown(ctx))
 	}
-	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader), sdkmetric.WithResource(res),
-		sdkmetric.WithView(views()...))
-	if err := runtime.Start(runtime.WithMeterProvider(provider)); err != nil {
-		return nil, errors.Join(fmt.Errorf("record Go runtime metrics: %w", err), provider.Shutdown(ctx))
+	// Process-wide: OpenTelemetry has one error handler.
+	otel.SetErrorHandler(&limitedWarn{logger: logger, every: time.Minute})
+	if metricsOn {
+		meters := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader), sdkmetric.WithResource(res),
+			sdkmetric.WithView(views()...))
+		providers.Meters = meters
+		providers.shutdown = append(providers.shutdown, meters.Shutdown)
+		if err := runtime.Start(runtime.WithMeterProvider(meters)); err != nil {
+			return nil, errors.Join(fmt.Errorf("record Go runtime metrics: %w", err), meters.Shutdown(ctx), exporter.Shutdown(ctx))
+		}
 	}
-	return &Metrics{Provider: provider, shutdown: provider.Shutdown}, nil
+	if tracesOn {
+		// Sends in the background, in batches, holding at most 2048 spans; past that, new ones are
+		// dropped (OTEL_BSP_* change these).
+		tracers := sdktrace.NewTracerProvider(sdktrace.WithBatcher(exporter), sdktrace.WithResource(res),
+			sdktrace.WithSampler(newSampler(ratio)))
+		providers.Tracers = tracers
+		providers.shutdown = append(providers.shutdown, tracers.Shutdown)
+	}
+	return providers, nil
 }
 
-// Flush sends the metrics not yet sent and stops recording, giving up after FlushTimeout. A failure
-// is logged to logger, not returned: the program has stopped cleanly or not by then, and losing the
-// last numbers doesn't change that.
-func (m *Metrics) Flush(logger zerolog.Logger) {
+// Flush sends the metrics and traces not yet sent and stops recording, giving up after
+// FlushTimeout. A failure is logged to logger at warn, like any failed send, not returned: the
+// program has stopped cleanly or not by then, and losing the last numbers doesn't change that.
+func (p *Providers) Flush(logger zerolog.Logger) {
 	ctx, cancel := context.WithTimeout(context.Background(), FlushTimeout)
 	defer cancel()
-	if err := m.shutdown(ctx); err != nil {
-		logger.Error().Err(err).Msg("metrics not flushed")
+	// At once, so both get the whole FlushTimeout.
+	errs := make([]error, len(p.shutdown))
+	var wg sync.WaitGroup
+	for i, shutdown := range p.shutdown {
+		wg.Go(func() { errs[i] = shutdown(ctx) })
 	}
+	wg.Wait()
+	if err := errors.Join(errs...); err != nil {
+		logger.Warn().Err(err).Str("source", "opentelemetry").Msg("telemetry not flushed")
+	}
+}
+
+// sampleRatio is OTEL_TRACES_SAMPLER_ARG: the share of traces kept, 1 when unset.
+func sampleRatio() (float64, error) {
+	value := os.Getenv("OTEL_TRACES_SAMPLER_ARG")
+	if value == "" {
+		return 1, nil
+	}
+	ratio, err := strconv.ParseFloat(value, 64)
+	if err != nil || math.IsNaN(ratio) || ratio < 0 || ratio > 1 {
+		return 0, fmt.Errorf("OTEL_TRACES_SAMPLER_ARG=%q: want a number from 0 to 1", value)
+	}
+	return ratio, nil
+}
+
+// newSampler decides which spans are kept. Only what serves a request or runs a job (a server or
+// consumer span) starts a trace, a ratio of them kept; everything else is kept when, and only
+// when, the trace it's in is. Database and key-value store clients start a span for every call,
+// even outside a request or job: a job queue polls every second, which would be a trace each.
+func newSampler(ratio float64) sdktrace.Sampler { //nolint:ireturn // the SDK takes samplers as an interface
+	return sdktrace.ParentBased(entryPoints{keep: sdktrace.TraceIDRatioBased(ratio)})
+}
+
+// entryPoints is the sampler for spans with no parent: server and consumer spans by keep, others
+// dropped.
+type entryPoints struct {
+	keep sdktrace.Sampler
+}
+
+func (s entryPoints) ShouldSample(p sdktrace.SamplingParameters) sdktrace.SamplingResult {
+	if p.Kind == trace.SpanKindServer || p.Kind == trace.SpanKindConsumer {
+		return s.keep.ShouldSample(p)
+	}
+	return sdktrace.SamplingResult{
+		Decision:   sdktrace.Drop,
+		Tracestate: trace.SpanContextFromContext(p.ParentContext).TraceState(),
+	}
+}
+
+func (s entryPoints) Description() string {
+	return "EntryPoints{" + s.keep.Description() + "}"
+}
+
+// limitedWarn logs OpenTelemetry's errors at warn, at most one line every so often, with how many
+// it skipped since the last: an unreachable endpoint fails every send.
+type limitedWarn struct {
+	logger  zerolog.Logger
+	every   time.Duration
+	mu      sync.Mutex
+	last    time.Time
+	skipped int
+}
+
+func (l *limitedWarn) Handle(err error) {
+	l.mu.Lock()
+	now := time.Now()
+	if !l.last.IsZero() && now.Sub(l.last) < l.every {
+		l.skipped++
+		l.mu.Unlock()
+		return
+	}
+	skipped := l.skipped
+	l.last, l.skipped = now, 0
+	l.mu.Unlock()
+
+	line := l.logger.Warn().Err(err).Str("source", "opentelemetry")
+	if skipped > 0 {
+		line.Int("errors_skipped", skipped)
+	}
+	line.Msg("telemetry: OpenTelemetry reported an error")
 }
 
 // newResource describes the program. service.instance.id is new on every start: without it, copies
@@ -114,7 +237,7 @@ func newResource(ctx context.Context, p Program) (*resource.Resource, error) {
 		resource.WithFromEnv(),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("describe the program for metrics: %w", err)
+		return nil, fmt.Errorf("describe the program for telemetry: %w", err)
 	}
 	return res, nil
 }

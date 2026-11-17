@@ -11,6 +11,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/rs/zerolog"
 	"go.opentelemetry.io/otel/metric/noop"
+	tracenoop "go.opentelemetry.io/otel/trace/noop"
 
 	"github.com/mdayat/go-template/internal/apperr"
 	"github.com/mdayat/go-template/internal/metrictest"
@@ -43,7 +44,7 @@ func logged(ctx context.Context, t *testing.T, run queue.Run, handler queue.Hand
 	t.Helper()
 	var logs bytes.Buffer
 	mux := queue.NewMux()
-	mux.Use(logJobs(zerolog.New(&logs), noop.Float64Histogram{}))
+	mux.Use(logJobs(zerolog.New(&logs), noop.Float64Histogram{}, tracenoop.NewTracerProvider().Tracer("")))
 	mux.Handle(run.Type, handler)
 
 	err := mux.Process(queue.WithRun(ctx, run), run.Type, nil)
@@ -175,7 +176,7 @@ func TestLogJobsRecordsDurations(t *testing.T) {
 		t.Fatal(err)
 	}
 	mux := queue.NewMux()
-	mux.Use(logJobs(zerolog.Nop(), durations))
+	mux.Use(logJobs(zerolog.Nop(), durations, tracenoop.NewTracerProvider().Tracer("")))
 	mux.Handle("test:ok", func(context.Context, []byte) error { return nil })
 	mux.Handle("test:fail", func(context.Context, []byte) error { return errors.New("down") })
 	mux.Handle("test:panic", func(context.Context, []byte) error { panic("boom") })

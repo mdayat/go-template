@@ -10,6 +10,7 @@ import (
 	"github.com/hibiken/asynq"
 	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog"
+	"go.opentelemetry.io/otel/propagation"
 
 	"github.com/mdayat/go-template/internal/queue"
 )
@@ -68,8 +69,10 @@ func (s *Server) Shutdown() {
 	s.server.Shutdown()
 }
 
-// process runs one asynq task through the mux, with the run's details in its context.
+// process runs one asynq task through the mux, with the run's details in its context, and the
+// trace it was queued in, if any (see newTask), for the run's span to join.
 func (s *Server) process(ctx context.Context, t *asynq.Task) error {
+	ctx = traceHeaders.Extract(ctx, propagation.MapCarrier(t.Headers()))
 	id, _ := asynq.GetTaskID(ctx)
 	queueName, _ := asynq.GetQueueName(ctx)
 	retried, _ := asynq.GetRetryCount(ctx)

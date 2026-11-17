@@ -9,7 +9,10 @@ import (
 
 	"github.com/rs/zerolog"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/metric"
+	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/mdayat/go-template/internal/apperr"
 	"github.com/mdayat/go-template/internal/queue"
@@ -18,16 +21,34 @@ import (
 // logJobs writes one summary line per job run: info when it succeeded, warn when it failed and
 // will be retried, error when it failed for good or panicked. A handler's error or panic is on that
 // line, so each run is logged exactly once. Payloads are never logged: they can hold personal data.
-// Each run's time also goes to durations (see newJobDurations), with the same outcome.
+// Each run's time also goes to durations (see newJobDurations), with the same outcome, and each run
+// is a span in tracer ("process deleted_rows:purge"), in the trace of the request that queued it if
+// that trace is kept; the handler's queries, commands and calls hang under it. The line carries the
+// span's trace.id and span.id, as does every line the handler logs.
 //
 // It also marks an apperr error queue.ErrNoRetry: an expected failure (a bad payload, a row that's
 // gone) fails the same way on every retry.
-func logJobs(logger zerolog.Logger, durations metric.Float64Histogram) queue.Middleware {
+func logJobs(logger zerolog.Logger, durations metric.Float64Histogram, tracer trace.Tracer) queue.Middleware {
 	return func(next queue.Handler) queue.Handler {
 		return func(ctx context.Context, payload []byte) error {
 			start := time.Now()
 			run, _ := queue.RunFrom(ctx)
-			jobLogger := logger.With().Str("job_type", run.Type).Str("job_id", run.ID).Logger()
+			ctx, span := tracer.Start(ctx, "process "+run.Type, trace.WithSpanKind(trace.SpanKindConsumer),
+				trace.WithAttributes(
+					semconv.MessagingOperationTypeKey.String("process"),
+					semconv.MessagingDestinationName(run.Queue),
+					semconv.MessagingMessageID(run.ID),
+					attribute.String("job.type", run.Type),
+					attribute.Int("job.attempt", run.Attempt),
+				))
+			defer span.End()
+			fields := logger.With().Str("job_type", run.Type).Str("job_id", run.ID)
+			// Not when the span isn't being recorded: its IDs would be the queueing request's.
+			if sc := span.SpanContext(); span.IsRecording() {
+				fields = fields.Dict("trace", zerolog.Dict().Str("id", sc.TraceID().String())).
+					Dict("span", zerolog.Dict().Str("id", sc.SpanID().String()))
+			}
+			jobLogger := fields.Logger()
 
 			var jr jobRun
 			jr.process(jobLogger.WithContext(ctx), next, payload)
@@ -59,6 +80,12 @@ func logJobs(logger zerolog.Logger, durations metric.Float64Histogram) queue.Mid
 				attribute.String("job.queue", run.Queue),
 				attribute.String("job.result", result),
 			))
+			span.SetAttributes(attribute.String("job.result", result))
+			if err != nil {
+				// The message, as on the log line; never the stack.
+				span.RecordError(err)
+				span.SetStatus(codes.Error, result)
+			}
 			line := jobLogger.WithLevel(level).
 				Str("queue", run.Queue).
 				Int("attempt", run.Attempt).

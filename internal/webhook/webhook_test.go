@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	tracenoop "go.opentelemetry.io/otel/trace/noop"
+
 	"github.com/mdayat/go-template/internal/httpclient"
 )
 
@@ -21,7 +23,7 @@ func TestSendWithoutAKeySendsNoHeader(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	if err := NewHTTPSender(httpclient.New(5*time.Second), server.URL).Send(t.Context(), "", []byte(`{"n":1}`)); err != nil {
+	if err := NewHTTPSender(httpclient.New(5*time.Second, tracenoop.NewTracerProvider()), server.URL).Send(t.Context(), "", []byte(`{"n":1}`)); err != nil {
 		t.Fatalf("Send() error = %v", err)
 	}
 	if got := <-headers; len(got.Values("Idempotency-Key")) != 0 {
@@ -44,7 +46,7 @@ func TestSendErrors(t *testing.T) {
 		{"not a URL", "https://exa mple.com/hook?token=s3cret", false},
 	}
 	for _, tt := range tests {
-		err := NewHTTPSender(httpclient.New(5*time.Second), tt.url).Send(t.Context(), "key", []byte(`{}`))
+		err := NewHTTPSender(httpclient.New(5*time.Second, tracenoop.NewTracerProvider()), tt.url).Send(t.Context(), "key", []byte(`{}`))
 		if err == nil || strings.Contains(fmt.Sprint(err), "s3cret") {
 			t.Errorf("%s: Send() error = %v, want one without the URL", tt.name, err)
 		}

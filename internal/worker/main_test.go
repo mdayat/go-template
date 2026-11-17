@@ -7,6 +7,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog"
 	"go.opentelemetry.io/otel/metric/noop"
+	tracenoop "go.opentelemetry.io/otel/trace/noop"
 
 	"github.com/mdayat/go-template/internal/db"
 	"github.com/mdayat/go-template/internal/queue"
@@ -27,7 +28,7 @@ func testWorker(t *testing.T) (*queue.Mux, *pgxpool.Pool) {
 // newTestMux is NewMux for tests: no logs, no metrics.
 func newTestMux(t *testing.T, services Services) *queue.Mux {
 	t.Helper()
-	mux, err := NewMux(zerolog.Nop(), noop.NewMeterProvider(), services)
+	mux, err := NewMux(zerolog.Nop(), noop.NewMeterProvider(), tracenoop.NewTracerProvider(), services)
 	if err != nil {
 		t.Fatalf("NewMux() error = %v", err)
 	}

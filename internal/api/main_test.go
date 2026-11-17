@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog"
 	"go.opentelemetry.io/otel/metric/noop"
+	tracenoop "go.opentelemetry.io/otel/trace/noop"
 
 	"github.com/mdayat/go-template/internal/auth/jwks"
 	"github.com/mdayat/go-template/internal/authtest"
@@ -48,11 +49,11 @@ func testAPIWith(t *testing.T, limits Limits) (http.Handler, *pgxpool.Pool, *aut
 	services := NewServices(
 		db.New(pool),
 		// remove:worker
-		valkey.NewEnqueuer(testredis.New(t)), // the test job queue
+		valkey.NewEnqueuer(testredis.New(t), tracenoop.NewTracerProvider()), // the test job queue
 		// remove:end
 	)
 	authn, issuer := testAuthenticator(t)
-	return NewRouter(zerolog.Nop(), noop.NewMeterProvider(), services, authn, limits), pool, issuer
+	return NewRouter(zerolog.Nop(), noop.NewMeterProvider(), tracenoop.NewTracerProvider(), services, authn, limits), pool, issuer
 }
 
 // testSubject is who testAPI's requests are signed in as.
@@ -93,7 +94,7 @@ func testUser(t *testing.T, pool *pgxpool.Pool, admin bool) uuid.UUID {
 func testAuthenticator(t *testing.T) (*jwks.Authenticator, *authtest.Issuer) {
 	t.Helper()
 	issuer := authtest.NewIssuer(t)
-	authn, err := jwks.New(t.Context(), issuer.Config(), httpclient.New(5*time.Second), zerolog.Nop())
+	authn, err := jwks.New(t.Context(), issuer.Config(), httpclient.New(5*time.Second, tracenoop.NewTracerProvider()), zerolog.Nop())
 	if err != nil {
 		t.Fatalf("jwks.New() error = %v", err)
 	}

@@ -37,6 +37,8 @@ that line, and a panic its stack: there is never a second line for the same fail
   (the connection's is the proxy's). When it can't be told (an unreadable `X-Forwarded-For`),
   `client.address` is the connection's address instead.
 - A successful `/healthz` isn't logged: load balancers call it every few seconds.
+- A request whose trace is kept carries `trace.id` and `span.id`, on its summary line and on every
+  line logged during it ([tracing.md](tracing.md)).
 
 <!-- remove:end -->
 <!-- remove:worker -->

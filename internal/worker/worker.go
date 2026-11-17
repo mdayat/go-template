@@ -9,6 +9,7 @@ import (
 
 	"github.com/rs/zerolog"
 	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/mdayat/go-template/internal/db"
 	"github.com/mdayat/go-template/internal/queue"
@@ -45,14 +46,15 @@ func NewServices(queries *db.Queries, purgeReports EventSender) Services {
 	}
 }
 
-// NewMux returns the handler for every job type, each job logged to logger and measured to meters.
-func NewMux(logger zerolog.Logger, meters metric.MeterProvider, services Services) (*queue.Mux, error) {
+// NewMux returns the handler for every job type, each job logged to logger, measured to meters and
+// traced to tracers.
+func NewMux(logger zerolog.Logger, meters metric.MeterProvider, tracers trace.TracerProvider, services Services) (*queue.Mux, error) {
 	durations, err := newJobDurations(meters)
 	if err != nil {
 		return nil, err
 	}
 	mux := queue.NewMux()
-	mux.Use(logJobs(logger, durations))
+	mux.Use(logJobs(logger, durations, tracers.Tracer("github.com/mdayat/go-template/internal/worker")))
 	purgeJobs{tables: tablePurges(services), reports: services.PurgeReports}.mount(mux)
 	return mux, nil
 }

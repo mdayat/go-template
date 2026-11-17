@@ -119,8 +119,9 @@ contexts cancelled, which stops their queries. They run again on the next worker
 
 A failed run carries `error.message` (and `error.stack_trace` for a panic) on the same line. Inside
 a handler, `zerolog.Ctx(ctx)` is the job's logger: lines logged through it carry `job_type` and
-`job_id`. Log on a line of your own only what's worth finding later (`"deleted rows purged"` with
-each table's count), never the payload.
+`job_id`, and `trace.id` and `span.id` when the run's trace is kept: the run is a span, in the trace
+of the request that queued it ([tracing.md](tracing.md)). Log on a line of your own only what's
+worth finding later (`"deleted rows purged"` with each table's count), never the payload.
 
 asynq also logs its own events (starting, shutting down, "Retry exhausted for task", a job put
 back in the queue), marked `"source":"asynq"`. Alert on the `job completed` lines, not on those.

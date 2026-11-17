@@ -11,7 +11,14 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"time"
+
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
+	"go.opentelemetry.io/otel/trace"
+	tracenoop "go.opentelemetry.io/otel/trace/noop"
 )
 
 // New returns a client whose every call ends after timeout, from connecting to reading the whole
@@ -21,28 +28,67 @@ import (
 // It doesn't follow redirects: a 3xx reply is returned as it is (CheckStatus makes it an error).
 // Go would otherwise repeat a POST as a GET without its body after a 301, 302 or 303, so the call
 // would seem to work while nothing was delivered, and carry our headers to another host.
-func New(timeout time.Duration) *http.Client {
+//
+// Each call made inside a traced request or job is a span in tracers (see traced).
+func New(timeout time.Duration, tracers trace.TracerProvider) *http.Client {
 	if timeout <= 0 {
 		panic("httpclient: a time limit is required")
 	}
 	// Connecting and the TLS handshake get their own, shorter limit, so a host that's down fails
 	// fast instead of using up the whole call's time.
 	step := min(timeout, 5*time.Second)
+	var transport http.RoundTripper = &http.Transport{
+		Proxy:               http.ProxyFromEnvironment,
+		DialContext:         (&net.Dialer{Timeout: step, KeepAlive: 30 * time.Second}).DialContext,
+		TLSHandshakeTimeout: step,
+		IdleConnTimeout:     90 * time.Second,
+		MaxIdleConns:        100,
+		MaxIdleConnsPerHost: 10,
+		ForceAttemptHTTP2:   true,
+	}
+	if _, off := tracers.(tracenoop.TracerProvider); !off {
+		transport = traced{next: transport, tracer: tracers.Tracer("github.com/mdayat/go-template/internal/httpclient")}
+	}
 	return &http.Client{
 		Timeout: timeout,
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
-		Transport: &http.Transport{
-			Proxy:               http.ProxyFromEnvironment,
-			DialContext:         (&net.Dialer{Timeout: step, KeepAlive: 30 * time.Second}).DialContext,
-			TLSHandshakeTimeout: step,
-			IdleConnTimeout:     90 * time.Second,
-			MaxIdleConns:        100,
-			MaxIdleConnsPerHost: 10,
-			ForceAttemptHTTP2:   true,
-		},
+		Transport: transport,
 	}
+}
+
+// traced records each call as a client span ("POST"), from sending it until the reply's headers
+// arrive: its method, the host and port called, and the reply's status. Not OpenTelemetry's
+// ready-made transport, which records the whole URL (url.full), where a webhook or API key often
+// sits. Nor is the trace sent along (no traceparent header): the services we call aren't ours, and
+// needn't learn our trace IDs.
+type traced struct {
+	next   http.RoundTripper
+	tracer trace.Tracer
+}
+
+func (t traced) RoundTrip(r *http.Request) (*http.Response, error) {
+	attrs := []attribute.KeyValue{semconv.HTTPRequestMethodKey.String(r.Method), semconv.ServerAddress(r.URL.Hostname())}
+	if port, err := strconv.Atoi(r.URL.Port()); err == nil {
+		attrs = append(attrs, semconv.ServerPort(port))
+	}
+	ctx, span := t.tracer.Start(r.Context(), r.Method, trace.WithSpanKind(trace.SpanKindClient), trace.WithAttributes(attrs...))
+	defer span.End()
+
+	resp, err := t.next.RoundTrip(r.WithContext(ctx))
+	if err != nil {
+		// The kind of failure, not its message, which can name the host's address.
+		span.SetAttributes(semconv.ErrorTypeKey.String(fmt.Sprintf("%T", err)))
+		span.SetStatus(codes.Error, "call failed")
+		return nil, err //nolint:wrapcheck // a RoundTripper returns its transport's error as it is
+	}
+	span.SetAttributes(semconv.HTTPResponseStatusCode(resp.StatusCode))
+	if resp.StatusCode >= http.StatusBadRequest {
+		span.SetAttributes(semconv.ErrorTypeKey.String(strconv.Itoa(resp.StatusCode)))
+		span.SetStatus(codes.Error, "")
+	}
+	return resp, nil
 }
 
 // StatusError is a reply whose status says the call failed.

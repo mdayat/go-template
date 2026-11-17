@@ -72,14 +72,14 @@ func run() error {
 	startup.SetupLogger(cfg.app)
 	version := startup.Version(buildVersion)
 
-	metrics, err := telemetry.Start(ctx, telemetry.Program{Name: "api", Version: version, Env: cfg.app.Env}, log.Logger)
+	providers, err := telemetry.Start(ctx, telemetry.Program{Name: "api", Version: version, Env: cfg.app.Env}, log.Logger)
 	if err != nil {
 		return err
 	}
-	// Last, after the server and connections close, so their final numbers are sent too.
-	defer metrics.Flush(log.Logger)
+	// Last, after the server and connections close, so their final numbers and spans are sent too.
+	defer providers.Flush(log.Logger)
 
-	pool, err := startup.ConnectDB(ctx, cfg.databaseURL, metrics.Provider)
+	pool, err := startup.ConnectDB(ctx, cfg.databaseURL, providers.Meters, providers.Tracers)
 	if err != nil {
 		return err
 	}
@@ -87,7 +87,7 @@ func run() error {
 
 	// Not connected here: a Valkey that's down at startup must not stop the API, which counts in
 	// memory until Valkey answers (see valkey.Limiter).
-	limitsClient, err := startup.RedisFailFast(cfg.redisURL, rateLimitTimeout, "ratelimit", metrics.Provider)
+	limitsClient, err := startup.RedisFailFast(cfg.redisURL, rateLimitTimeout, "ratelimit", providers.Meters, providers.Tracers)
 	if err != nil {
 		return err
 	}
@@ -95,7 +95,7 @@ func run() error {
 	cfg.limits.Limiter = ratelimitvalkey.New(limitsClient, "api:", rateLimitTimeout, log.Logger)
 
 	// remove:worker
-	redisClient, err := startup.ConnectRedis(ctx, cfg.redisURL, "queue", metrics.Provider)
+	redisClient, err := startup.ConnectRedis(ctx, cfg.redisURL, "queue", providers.Meters, providers.Tracers)
 	if err != nil {
 		return err
 	}
@@ -105,17 +105,17 @@ func run() error {
 	services := api.NewServices(
 		db.New(pool),
 		// remove:worker
-		valkey.NewEnqueuer(redisClient),
+		valkey.NewEnqueuer(redisClient, providers.Tracers),
 		// remove:end
 	)
 	// Fetches the provider's keys now and hourly until ctx ends; a provider that can't be reached
 	// doesn't stop the API starting (requests needing sign-in get a 503 until the keys arrive).
-	authn, err := jwks.New(ctx, cfg.auth, httpclient.New(authKeysTimeout), log.Logger)
+	authn, err := jwks.New(ctx, cfg.auth, httpclient.New(authKeysTimeout, providers.Tracers), log.Logger)
 	if err != nil {
 		return err
 	}
 	server := &http.Server{
-		Handler:           api.NewRouter(log.Logger, metrics.Provider, services, authn, cfg.limits),
+		Handler:           api.NewRouter(log.Logger, providers.Meters, providers.Tracers, services, authn, cfg.limits),
 		ErrorLog:          api.ServerErrorLog(log.Logger),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,

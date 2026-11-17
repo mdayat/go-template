@@ -111,6 +111,15 @@ outside `cmd/`.
   client sets): route patterns and sqlc query names only.
 - Tests check metrics with `internal/metrictest`.
 
+**Traces** ([tracing.md](docs/standards/tracing.md))
+- Trace through the `trace.TracerProvider` passed in from `cmd/`; never OpenTelemetry's global one.
+- Only requests and job runs start a trace; your own span starts from the context you were given
+  and ends on every path (`defer span.End()`).
+- Never personal data (beyond a request's client IP and user agent), secrets, payloads, query
+  values or URLs in a span's name or attributes.
+- Outside calls go through `internal/httpclient`, which traces them without the URL and doesn't
+  send our trace out. Tests check spans with `internal/spantest`.
+
 <!-- remove:worker -->
 **Jobs** ([worker.md](docs/standards/worker.md))
 - Every job may run twice (retries, a deploy mid-job, duplicates): make a second run change nothing,
@@ -125,7 +134,7 @@ outside `cmd/`.
 <!-- remove:end -->
 **Outside services** ([outside-calls.md](docs/standards/outside-calls.md))
 - Behind a small interface defined where it's used, passed in from `cmd/`; its implementation in
-  its own package (`internal/webhook`). HTTP clients come from `httpclient.New(timeout)`, never
+  its own package (`internal/webhook`). HTTP clients come from `httpclient.New(timeout, tracers)`, never
   `http.Get`/`http.DefaultClient` or a client you build yourself.
 - While a caller waits (a request), don't retry.
 <!-- remove:worker -->

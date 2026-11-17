@@ -2,9 +2,14 @@ package startup
 
 import (
 	"context"
+	"strings"
 	"testing"
 
+	"go.opentelemetry.io/otel/metric/noop"
+	tracenoop "go.opentelemetry.io/otel/trace/noop"
+
 	"github.com/mdayat/go-template/internal/metrictest"
+	"github.com/mdayat/go-template/internal/spantest"
 	"github.com/mdayat/go-template/internal/testenv"
 )
 
@@ -16,7 +21,7 @@ func TestConnectDBRecordsMetrics(t *testing.T) {
 		t.Fatal(err)
 	}
 	rec := metrictest.New()
-	pool, err := ConnectDB(t.Context(), url, rec.Provider)
+	pool, err := ConnectDB(t.Context(), url, rec.Provider, tracenoop.NewTracerProvider())
 	if err != nil {
 		t.Fatalf("ConnectDB() error = %v", err)
 	}
@@ -54,6 +59,43 @@ func TestQueryName(t *testing.T) {
 	for stmt, want := range tests {
 		if got := queryName(context.Background(), stmt); got != want {
 			t.Errorf("queryName(%q) = %q, want %q", stmt, got, want)
+		}
+	}
+}
+
+// A query in a request or job is a span named by its sqlc name ("query Echo"), with its SQL but
+// never its values.
+func TestConnectDBTraces(t *testing.T) {
+	t.Parallel()
+	url, err := testenv.Get("TEST_DATABASE_URL")
+	if err != nil {
+		t.Fatal(err)
+	}
+	spans := spantest.New()
+	pool, err := ConnectDB(t.Context(), url, noop.NewMeterProvider(), spans.Provider)
+	if err != nil {
+		t.Fatalf("ConnectDB() error = %v", err)
+	}
+	t.Cleanup(pool.Close)
+	ctx, parent := spans.Provider.Tracer("test").Start(t.Context(), "request")
+
+	var got string
+	if err := pool.QueryRow(ctx, "-- name: Echo :one\nSELECT $1::text", "personal-data").Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	parent.End()
+
+	echo := spans.Named("query Echo")
+	if len(echo) != 1 || echo[0].Parent().SpanID() != parent.SpanContext().SpanID() {
+		t.Fatalf("spans = %q, want one query Echo under the request", spans.Names())
+	}
+	attrs := spantest.Attributes(echo[0])
+	if !strings.Contains(attrs["db.query.text"], "SELECT $1::text") {
+		t.Errorf("db.query.text = %q, want the SQL", attrs["db.query.text"])
+	}
+	for k, v := range attrs {
+		if strings.Contains(v, "personal-data") {
+			t.Errorf("attribute %s = %q holds a query's value", k, v)
 		}
 	}
 }

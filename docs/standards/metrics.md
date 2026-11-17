@@ -4,7 +4,8 @@ Each program measures itself with [OpenTelemetry](https://opentelemetry.io/docs/
 running numbers (counts, times) that a metrics store such as Prometheus keeps over time and Grafana
 charts. OpenTelemetry only measures and sends; where the numbers go is a setting, so changing store
 (Prometheus, Grafana Cloud, a vendor) changes no code. Logs say what happened to one request or job
-([logging.md](logging.md)); metrics say how many, how fast and how full, over time.
+([logging.md](logging.md)); metrics say how many, how fast and how full, over time; traces say
+where one request's or job's time went ([tracing.md](tracing.md)).
 
 ## What's recorded
 
@@ -15,7 +16,7 @@ don't overwrite each other's numbers).
 
 <!-- remove:api -->
 - **HTTP requests** (API; [otelhttp](https://pkg.go.dev/go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp),
-  `internal/api/metrics.go`): `http.server.request.duration` (seconds) by `http.route` (the pattern,
+  `internal/api/telemetry.go`): `http.server.request.duration` (seconds) by `http.route` (the pattern,
   `/tasks/{id}`), method and status; its count is the number of requests, so 401s, 404s and 429s
   show too, a client that hung up before the reply as 499, and a reply a panic cut off midway
   with `error.type` `aborted`. The health check isn't recorded, nor otelhttp's body-size histograms
@@ -48,15 +49,17 @@ through `internal/config`:
 
 | `OTEL_METRICS_EXPORTER` | What happens |
 |---|---|
-| unset, `none` | Off: nothing is recorded, at next to no cost. |
-| `otlp` | Pushed every `OTEL_METRIC_EXPORT_INTERVAL` ms (default 60000) to `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` (or `OTEL_EXPORTER_OTLP_ENDPOINT`), as OTLP over HTTP. |
+| unset, `otlp` | Pushed every `OTEL_METRIC_EXPORT_INTERVAL` ms (default 60000) to `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` (or `OTEL_EXPORTER_OTLP_ENDPOINT`; default `http://localhost:4318`), as OTLP over HTTP. |
+| `none` | Off: nothing is recorded, at next to no cost. `OTEL_SDK_DISABLED=true` turns off metrics and traces both. An empty value is unset: on. |
 | `prometheus` | Served for pulling at `http://OTEL_EXPORTER_PROMETHEUS_HOST:OTEL_EXPORTER_PROMETHEUS_PORT/metrics` (default `localhost:9464`: in a container, set the host to `0.0.0.0`, or a scraper outside can't reach it). Give each program on one machine its own port. |
 
 `OTEL_SERVICE_NAME` and `OTEL_RESOURCE_ATTRIBUTES` override what the program is called. A wrong
 setting (an unknown exporter, `console`, which would print metrics among the log lines, a bad
 `OTEL_RESOURCE_ATTRIBUTES`, a port already in use) stops the program at start, like any bad
-setting. A push that fails is logged at warn (`source: opentelemetry`) and the program carries
-on; on shutdown a pushing program sends what's left, within a second. Each start is a new
+setting. On unless set to `none`, so a deploy that forgets the settings still sends to the usual
+local address, and says so when nothing is there: a push that fails is logged at warn
+(`source: opentelemetry`), at most once a minute (with `errors_skipped`, how many weren't), and
+the program carries on. On shutdown a pushing program sends what's left, within a second. Each start is a new
 `service.instance.id`, so its series are new: mind the store's series limits if copies restart
 often.
 
@@ -67,10 +70,10 @@ the store's address and keys, retries while the store is down, and can drop or r
 one place. For one small service, pushing straight to the store is fine. Only the endpoint setting
 changes, never the code.
 
-**Locally**: `make metrics-up` starts Prometheus (receiving pushes) and Grafana at
-http://localhost:3000 with a dashboard per part, from `local/grafana/dashboards/`. Set
-`OTEL_METRICS_EXPORTER=otlp` in `.env` (the endpoint and a 10 s interval are already there) and
-start the programs. `make metrics-down` stops both.
+**Locally**: `make telemetry-up` starts Prometheus (receiving pushes), Jaeger (traces) and Grafana
+at http://localhost:3000 with a dashboard per part, from `local/grafana/dashboards/`. `.env` copied
+from `.example.env` already points at them, every 10 s; start the programs. `make telemetry-down`
+stops them.
 
 In Prometheus, names have `.` turned into `_` and the unit added: `db.client.operation.duration`
 is `db_client_operation_duration_seconds_bucket`, `_count` and `_sum`. When pushed, `service.name`
@@ -86,7 +89,7 @@ scrape config.
   library records from the request, not only what you add.
 <!-- remove:api -->
 - otelhttp takes `server.address` from the client's `Host` header unless given a fixed name;
-  `internal/api/metrics.go` gives one.
+  `internal/api/telemetry.go` gives one.
 <!-- remove:end -->
 - **Take the `metric.MeterProvider` passed in**, from `telemetry.Start` in `cmd/`; never
   OpenTelemetry's global one, which tests running in parallel would share. Lint refuses the global

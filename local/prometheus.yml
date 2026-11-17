@@ -1,4 +1,4 @@
-# Prometheus for local runs (compose profile "metrics"). It scrapes nothing: the programs push to it
+# Prometheus for local runs (compose profile "telemetry"). It scrapes nothing: the programs push to it
 # over OTLP (http://localhost:9090/api/v1/otlp, see .example.env).
 otlp:
   # Each program's service.name and service.instance.id become the job and instance labels; these

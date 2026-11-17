@@ -31,10 +31,11 @@ The implementation lives in a package of its own, named after what it does (`int
 Go's default HTTP client (`http.Get`, `http.DefaultClient`) waits forever: one stuck service then
 holds a request, a database connection or a job until the process restarts. So:
 
-- Build the client with `httpclient.New(timeout)`. It limits the whole call, from connecting to
-  reading the reply, and connecting and the TLS handshake on their own. Lint (forbidigo) refuses
-  the default client and transport; a client you build yourself (`&http.Client{}`) isn't caught,
-  so review catches that one.
+- Build the client with `httpclient.New(timeout, tracers)`. It limits the whole call, from
+  connecting to reading the reply, and connecting and the TLS handshake on their own; each call in a
+  traced request or job is a span, without its URL ([tracing.md](tracing.md)). Lint (forbidigo)
+  refuses the default client and transport; a client you build yourself (`&http.Client{}`) isn't
+  caught, so review catches that one.
 - It doesn't follow redirects: Go would repeat a POST as a GET without its body after a 301, 302 or
   303, so a "moved" service would look delivered while nothing was, and our headers would go to
   another host. A 3xx is an error that isn't retried; fix the URL.

@@ -1,12 +1,16 @@
 package valkey
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	"github.com/google/go-cmp/cmp"
+	"go.opentelemetry.io/otel/trace"
+	tracenoop "go.opentelemetry.io/otel/trace/noop"
 
 	"github.com/mdayat/go-template/internal/queue"
+	"github.com/mdayat/go-template/internal/spantest"
 	"github.com/mdayat/go-template/internal/testqueue"
 	"github.com/mdayat/go-template/internal/testredis"
 )
@@ -40,7 +44,7 @@ func TestEnqueueKeepsTheJobsOptions(t *testing.T) {
 				Type: "test:job", Queue: queueName, Payload: []byte(`{"n":1}`), Timeout: 90 * time.Second, MaxRetries: tt.maxRetries,
 			}
 
-			id, err := NewEnqueuer(client).Enqueue(t.Context(), job)
+			id, err := NewEnqueuer(client, tracenoop.NewTracerProvider()).Enqueue(t.Context(), job)
 			if err != nil {
 				t.Fatalf("Enqueue() error = %v", err)
 			}
@@ -63,7 +67,7 @@ func TestEnqueueRefusesBadJobs(t *testing.T) {
 	t.Parallel()
 	client := testredis.New(t)
 	queueName := testqueue.NewQueue(t, client)
-	enqueuer := NewEnqueuer(client)
+	enqueuer := NewEnqueuer(client, tracenoop.NewTracerProvider())
 	valid := queue.Job{Type: "test:job", Queue: queueName, Timeout: time.Minute, MaxRetries: 1}
 
 	tests := []struct {
@@ -82,7 +86,7 @@ func TestEnqueueRefusesBadJobs(t *testing.T) {
 		job := valid
 		tt.change(&job)
 		// The scheduler takes newTask's task without asynq's queueing checks.
-		if _, err := newTask(job); err == nil {
+		if _, err := newTask(t.Context(), job); err == nil {
 			t.Errorf("%s: newTask(%+v) error = nil, want one", tt.name, job)
 		}
 		if id, err := enqueuer.Enqueue(t.Context(), job); err == nil {
@@ -96,5 +100,37 @@ func TestEnqueueRefusesBadJobs(t *testing.T) {
 	}
 	if len(keys) != 0 {
 		t.Errorf("queue keys = %q, want none: nothing should be queued", keys)
+	}
+}
+
+// A job takes along the trace it's queued in, in its headers, only when its span is being
+// recorded: a dropped trace would drop the job's run too, and a span that isn't ours (a caller's,
+// passed on by a tracer that records nothing) would let the caller choose the job's trace.
+func TestEnqueueCarriesOnlyKeptTraces(t *testing.T) {
+	t.Parallel()
+	job := queue.Job{Type: "test:job", Queue: "q", Timeout: time.Second}
+	kept, span := spantest.New().Provider.Tracer("test").Start(t.Context(), "send")
+	defer span.End()
+	callers := trace.ContextWithRemoteSpanContext(t.Context(), trace.NewSpanContext(trace.SpanContextConfig{
+		TraceID: trace.TraceID{1}, SpanID: trace.SpanID{2}, TraceFlags: trace.FlagsSampled, Remote: true,
+	}))
+
+	traceparent := func(ctx context.Context) string {
+		t.Helper()
+		task, err := newTask(ctx, job)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return task.Headers()["traceparent"]
+	}
+	sc := span.SpanContext()
+	if got, want := traceparent(kept), "00-"+sc.TraceID().String()+"-"+sc.SpanID().String()+"-01"; got != want {
+		t.Errorf("kept: traceparent = %q, want %q", got, want)
+	}
+	if got := traceparent(callers); got != "" {
+		t.Errorf("a caller's trace: traceparent = %q, want none", got)
+	}
+	if got := traceparent(t.Context()); got != "" {
+		t.Errorf("no trace: traceparent = %q, want none", got)
 	}
 }

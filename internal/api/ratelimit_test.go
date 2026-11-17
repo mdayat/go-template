@@ -14,6 +14,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/rs/zerolog"
 	"go.opentelemetry.io/otel/metric/noop"
+	tracenoop "go.opentelemetry.io/otel/trace/noop"
 
 	ratelimitvalkey "github.com/mdayat/go-template/internal/ratelimit/valkey"
 	"github.com/mdayat/go-template/internal/testredis"
@@ -281,7 +282,7 @@ func TestRateLimitWithoutLimiterPanics(t *testing.T) {
 			t.Error("NewRouter() with a limit and no Limiter didn't panic")
 		}
 	}()
-	NewRouter(zerolog.Nop(), noop.NewMeterProvider(), Services{}, nil, Limits{PerIP: 1})
+	NewRouter(zerolog.Nop(), noop.NewMeterProvider(), tracenoop.NewTracerProvider(), Services{}, nil, Limits{PerIP: 1})
 }
 
 // Load balancers check the health route often, from few IPs: it's never limited.
@@ -317,7 +318,7 @@ func TestRateLimitZeroIsOff(t *testing.T) {
 func TestUntrustedForwardedForIsLoggedOnce(t *testing.T) {
 	t.Parallel()
 	var logs bytes.Buffer
-	router := newBaseRouter(zerolog.New(&logs), noop.NewMeterProvider(), []string{"10.0.0.0/8"})
+	router := newBaseRouter(zerolog.New(&logs), noop.NewMeterProvider(), tracenoop.NewTracerProvider(), []string{"10.0.0.0/8"})
 	router.Get("/ok", func(http.ResponseWriter, *http.Request) {})
 
 	warnings := func() int {
@@ -386,7 +387,7 @@ func TestLogNamesTheClient(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			var logs bytes.Buffer
-			router := newBaseRouter(zerolog.New(&logs), noop.NewMeterProvider(), tt.trustedProxies)
+			router := newBaseRouter(zerolog.New(&logs), noop.NewMeterProvider(), tracenoop.NewTracerProvider(), tt.trustedProxies)
 			router.Get("/ok", func(http.ResponseWriter, *http.Request) {})
 
 			tt.rq.sendTo(t, router, "/ok")

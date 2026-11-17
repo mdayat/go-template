@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog"
 	"go.opentelemetry.io/otel/metric/noop"
+	tracenoop "go.opentelemetry.io/otel/trace/noop"
 
 	"github.com/mdayat/go-template/internal/auth/jwks"
 	"github.com/mdayat/go-template/internal/authtest"
@@ -28,13 +29,13 @@ import (
 // tests.
 func protectedRouter(t *testing.T, cfg jwks.Config) (http.Handler, *pgxpool.Pool, *bytes.Buffer) {
 	t.Helper()
-	authn, err := jwks.New(t.Context(), cfg, httpclient.New(5*time.Second), zerolog.Nop())
+	authn, err := jwks.New(t.Context(), cfg, httpclient.New(5*time.Second, tracenoop.NewTracerProvider()), zerolog.Nop())
 	if err != nil {
 		t.Fatalf("jwks.New() error = %v", err)
 	}
 	pool := testdb.New(t)
 	var logs bytes.Buffer
-	router := newBaseRouter(zerolog.New(&logs), noop.NewMeterProvider(), nil)
+	router := newBaseRouter(zerolog.New(&logs), noop.NewMeterProvider(), tracenoop.NewTracerProvider(), nil)
 	router.With(authenticate(authn, user.NewService(db.New(pool)), nil)).Get("/private", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})

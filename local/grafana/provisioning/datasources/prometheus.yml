@@ -6,3 +6,10 @@ datasources:
     access: proxy
     url: http://prometheus:9090
     isDefault: true
+  # Traces, in Explore (signed in: the anonymous viewer can't open it): search by service, or
+  # paste a trace.id from a log line.
+  - name: Jaeger
+    uid: jaeger
+    type: jaeger
+    access: proxy
+    url: http://jaeger:16686

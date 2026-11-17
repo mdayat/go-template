@@ -13,6 +13,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/rs/zerolog"
+	tracenoop "go.opentelemetry.io/otel/trace/noop"
 
 	"github.com/mdayat/go-template/internal/auth"
 	"github.com/mdayat/go-template/internal/auth/jwks"
@@ -22,7 +23,7 @@ import (
 
 func newAuthenticator(t *testing.T, cfg jwks.Config) *jwks.Authenticator {
 	t.Helper()
-	a, err := jwks.New(t.Context(), cfg, httpclient.New(5*time.Second), zerolog.Nop())
+	a, err := jwks.New(t.Context(), cfg, httpclient.New(5*time.Second, tracenoop.NewTracerProvider()), zerolog.Nop())
 	if err != nil {
 		t.Fatalf("jwks.New() error = %v", err)
 	}
@@ -239,7 +240,7 @@ func TestNewRefuses(t *testing.T) {
 	for _, tt := range tests {
 		cfg := ok
 		tt.change(&cfg)
-		if a, err := jwks.New(t.Context(), cfg, httpclient.New(time.Second), zerolog.Nop()); err == nil {
+		if a, err := jwks.New(t.Context(), cfg, httpclient.New(time.Second, tracenoop.NewTracerProvider()), zerolog.Nop()); err == nil {
 			t.Errorf("%s: jwks.New() = %v, want an error", tt.name, a)
 		}
 	}

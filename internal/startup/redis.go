@@ -10,6 +10,8 @@ import (
 	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog"
 	"go.opentelemetry.io/otel/metric"
+	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // redisLogger sends go-redis's own messages (a failed dial, a dropped connection) to the JSON log
@@ -25,13 +27,14 @@ func (l redisLogger) Printf(_ context.Context, format string, v ...any) {
 
 // ConnectRedis returns a client on url (redis:// or rediss://) once a connection works. It records
 // to meters, from the app's side, each command's time and the connections' use, under pool (what
-// the client is for: "queue"), kept apart from the program's other clients.
-func ConnectRedis(ctx context.Context, url, pool string, meters metric.MeterProvider) (*redis.Client, error) {
+// the client is for: "queue"), kept apart from the program's other clients; and each command in a
+// traced request or job as a span in tracers.
+func ConnectRedis(ctx context.Context, url, pool string, meters metric.MeterProvider, tracers trace.TracerProvider) (*redis.Client, error) {
 	opts, err := parseRedisURL(url)
 	if err != nil {
 		return nil, err
 	}
-	client, err := instrumented(opts, pool, meters)
+	client, err := instrumented(opts, pool, meters, tracers)
 	if err != nil {
 		return nil, err
 	}
@@ -48,8 +51,10 @@ func ConnectRedis(ctx context.Context, url, pool string, meters metric.MeterProv
 // (the API's rate limits): each command gives up after timeout and isn't retried, so a request
 // waits about timeout for it at most, instead of go-redis's defaults of seconds per try and several
 // tries. Unlike ConnectRedis it doesn't connect first: the caller copes with Valkey being down. It
-// records metrics as ConnectRedis does.
-func RedisFailFast(url string, timeout time.Duration, pool string, meters metric.MeterProvider) (*redis.Client, error) {
+// records metrics and traces as ConnectRedis does.
+func RedisFailFast(
+	url string, timeout time.Duration, pool string, meters metric.MeterProvider, tracers trace.TracerProvider,
+) (*redis.Client, error) {
 	opts, err := parseRedisURL(url)
 	if err != nil {
 		return nil, err
@@ -64,10 +69,10 @@ func RedisFailFast(url string, timeout time.Duration, pool string, meters metric
 	opts.DialerRetries = 1
 	// A request's own deadline (its time limit, or the client hanging up) ends the call too.
 	opts.ContextTimeoutEnabled = true
-	return instrumented(opts, pool, meters)
+	return instrumented(opts, pool, meters, tracers)
 }
 
-func instrumented(opts *redis.Options, pool string, meters metric.MeterProvider) (*redis.Client, error) {
+func instrumented(opts *redis.Options, pool string, meters metric.MeterProvider, tracers trace.TracerProvider) (*redis.Client, error) {
 	client := redis.NewClient(opts)
 	err := redisotel.InstrumentMetrics(client,
 		redisotel.WithMeterProvider(meters),
@@ -77,6 +82,19 @@ func instrumented(opts *redis.Options, pool string, meters metric.MeterProvider)
 	)
 	if err != nil {
 		return nil, errors.Join(fmt.Errorf("record Valkey metrics: %w", err), client.Close())
+	}
+	err = redisotel.InstrumentTracing(client,
+		redisotel.WithTracerProvider(tracers),
+		redisotel.WithAttributes(semconv.DBClientConnectionPoolName(pool)),
+		// The span is named by the command (SET); its arguments, a queued job's payload among them,
+		// can hold personal data.
+		redisotel.WithDBStatement(false),
+		// Where in go-redis or the library calling it the command was sent from: a stack walk per
+		// command, for nothing a reader needs.
+		redisotel.WithCallerEnabled(false),
+	)
+	if err != nil {
+		return nil, errors.Join(fmt.Errorf("trace Valkey commands: %w", err), client.Close())
 	}
 	return client, nil
 }

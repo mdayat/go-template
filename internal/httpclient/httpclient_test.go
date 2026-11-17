@@ -14,6 +14,12 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
+	tracenoop "go.opentelemetry.io/otel/trace/noop"
+
+	"github.com/mdayat/go-template/internal/spantest"
 )
 
 // callContext is a call's context with its own deadline well past the client's limits, so a client
@@ -38,7 +44,7 @@ func TestNewEndsCallsAtTheTimeLimit(t *testing.T) {
 	}
 
 	start := time.Now()
-	resp, err := New(200 * time.Millisecond).Do(req)
+	resp, err := New(200*time.Millisecond, tracenoop.NewTracerProvider()).Do(req)
 	if resp != nil {
 		_ = resp.Body.Close()
 	}
@@ -78,7 +84,7 @@ func TestNewEndsCallsThatStallMidBody(t *testing.T) {
 	}
 
 	start := time.Now()
-	resp, err := New(200 * time.Millisecond).Do(req)
+	resp, err := New(200*time.Millisecond, tracenoop.NewTracerProvider()).Do(req)
 	if err != nil {
 		t.Fatalf("Do() error = %v, want the headers to arrive", err)
 	}
@@ -107,7 +113,7 @@ func TestNewDoesNotFollowRedirects(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	resp, err := New(5 * time.Second).Do(req)
+	resp, err := New(5*time.Second, tracenoop.NewTracerProvider()).Do(req)
 	if err != nil {
 		t.Fatalf("Do() error = %v, want the 301 reply", err)
 	}
@@ -130,7 +136,7 @@ func TestNewRefusesNoTimeLimit(t *testing.T) {
 		panicked := true
 		func() {
 			defer func() { _ = recover() }()
-			New(timeout)
+			New(timeout, tracenoop.NewTracerProvider())
 			panicked = false
 		}()
 		if !panicked {
@@ -199,6 +205,60 @@ func TestRetryableErrorsWithoutAStatus(t *testing.T) {
 	for _, tt := range tests {
 		if got := Retryable(tt.err); got != tt.want {
 			t.Errorf("%s: Retryable(%v) = %v, want %v", tt.name, tt.err, got, tt.want)
+		}
+	}
+}
+
+// A call inside a trace is a client span with its method, host and status: never the URL, which
+// can hold a key. The trace isn't sent to the service called.
+func TestNewTracesCalls(t *testing.T) {
+	t.Parallel()
+	var traceparent string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		traceparent = r.Header.Get("Traceparent")
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	t.Cleanup(server.Close)
+	spans := spantest.New()
+	ctx, parent := spans.Provider.Tracer("test").Start(callContext(t), "job")
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, server.URL+"/hooks/secret-key?token=abc", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := New(5*time.Second, spans.Provider).Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	parent.End()
+
+	if traceparent != "" {
+		t.Errorf("the service got traceparent %q, want none", traceparent)
+	}
+	calls := spans.Named("POST")
+	if len(calls) != 1 {
+		t.Fatalf("spans = %q, want one POST", spans.Names())
+	}
+	call := calls[0]
+	if call.SpanKind() != trace.SpanKindClient || call.Parent().SpanID() != parent.SpanContext().SpanID() {
+		t.Errorf("kind %v, parent %v; want a client span under the job's", call.SpanKind(), call.Parent())
+	}
+	attrs := spantest.Attributes(call)
+	host, port, _ := net.SplitHostPort(server.Listener.Addr().String())
+	want := map[string]string{
+		"http.request.method": "POST", "server.address": host, "server.port": port,
+		"http.response.status_code": "502", "error.type": "502",
+	}
+	if !reflect.DeepEqual(attrs, want) {
+		t.Errorf("attributes = %v, want %v", attrs, want)
+	}
+	if call.Status().Code != codes.Error {
+		t.Errorf("status = %v, want error for a 502", call.Status())
+	}
+	for _, kv := range call.Attributes() {
+		if strings.Contains(kv.Value.String(), "secret-key") || strings.Contains(kv.Value.String(), "token") {
+			t.Errorf("attribute %s = %q holds the URL", kv.Key, kv.Value.String())
 		}
 	}
 }

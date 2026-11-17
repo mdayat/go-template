@@ -11,6 +11,7 @@ import (
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/mdayat/go-template/internal/config"
 	"github.com/mdayat/go-template/internal/db"
@@ -35,11 +36,11 @@ const webhookTimeout = 10 * time.Second
 // purgeReports returns where the purge reports to: the webhook at url, or nowhere if url is "".
 //
 //nolint:ireturn // one of two implementations, chosen by a setting
-func purgeReports(url string) worker.EventSender {
+func purgeReports(url string, tracers trace.TracerProvider) worker.EventSender {
 	if url == "" {
 		return webhook.Discard{}
 	}
-	return webhook.NewHTTPSender(httpclient.New(webhookTimeout), url)
+	return webhook.NewHTTPSender(httpclient.New(webhookTimeout, tracers), url)
 }
 
 func main() {
@@ -69,20 +70,21 @@ func run() error {
 	startup.SetupLogger(cfg.app)
 	version := startup.Version(buildVersion)
 
-	metrics, err := telemetry.Start(ctx, telemetry.Program{Name: "worker", Version: version, Env: cfg.app.Env}, log.Logger)
+	providers, err := telemetry.Start(ctx, telemetry.Program{Name: "worker", Version: version, Env: cfg.app.Env}, log.Logger)
 	if err != nil {
 		return err
 	}
-	// Last, after the job server and connections close, so the last jobs' numbers are sent too.
-	defer metrics.Flush(log.Logger)
+	// Last, after the job server and connections close, so the last jobs' numbers and spans are
+	// sent too.
+	defer providers.Flush(log.Logger)
 
-	pool, err := startup.ConnectDB(ctx, cfg.databaseURL, metrics.Provider)
+	pool, err := startup.ConnectDB(ctx, cfg.databaseURL, providers.Meters, providers.Tracers)
 	if err != nil {
 		return err
 	}
 	defer pool.Close()
 
-	redisClient, err := startup.ConnectRedis(ctx, cfg.redisURL, "queue", metrics.Provider)
+	redisClient, err := startup.ConnectRedis(ctx, cfg.redisURL, "queue", providers.Meters, providers.Tracers)
 	if err != nil {
 		return err
 	}
@@ -96,7 +98,8 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	mux, err := worker.NewMux(log.Logger, metrics.Provider, worker.NewServices(db.New(pool), purgeReports(cfg.purgeWebhookURL)))
+	services := worker.NewServices(db.New(pool), purgeReports(cfg.purgeWebhookURL, providers.Tracers))
+	mux, err := worker.NewMux(log.Logger, providers.Meters, providers.Tracers, services)
 	if err != nil {
 		return err
 	}

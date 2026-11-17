@@ -2,9 +2,11 @@ package telemetry
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"strconv"
 	"strings"
 	"sync"
@@ -14,24 +16,200 @@ import (
 	"github.com/rs/zerolog"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/metric/noop"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/trace"
+	tracenoop "go.opentelemetry.io/otel/trace/noop"
 )
 
 // These tests set OTEL_* variables, so none runs in parallel.
 
-// Unset or "none": metrics off, at no cost.
+// "none": off, at no cost.
 func TestStartOff(t *testing.T) {
 	cleanEnv(t)
-	for _, value := range []string{"", "none"} {
-		t.Setenv("OTEL_METRICS_EXPORTER", value)
+	t.Setenv("OTEL_METRICS_EXPORTER", "none")
+	t.Setenv("OTEL_TRACES_EXPORTER", "none")
 
-		m, err := Start(t.Context(), Program{Name: "test"}, zerolog.Nop())
-		if err != nil {
-			t.Fatalf("OTEL_METRICS_EXPORTER=%q: Start() error = %v", value, err)
+	m, err := Start(t.Context(), Program{Name: "test"}, zerolog.Nop())
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if _, ok := m.Meters.(noop.MeterProvider); !ok {
+		t.Errorf("Meters = %T, want the no-op one", m.Meters)
+	}
+	if _, ok := m.Tracers.(tracenoop.TracerProvider); !ok {
+		t.Errorf("Tracers = %T, want the no-op one", m.Tracers)
+	}
+	m.Flush(zerolog.Nop())
+}
+
+// Unset: both on (TestStartPushesTraces and TestStartLogsFailedPushes show where to), so a deploy
+// that forgets the settings still sends.
+func TestStartOnByDefault(t *testing.T) {
+	cleanEnv(t)
+	// Somewhere nothing listens, not a local collector.
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:"+strconv.Itoa(freePort(t)))
+
+	m, err := Start(t.Context(), Program{Name: "test"}, zerolog.Nop())
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() { m.Flush(zerolog.Nop()) })
+	if _, ok := m.Meters.(*sdkmetric.MeterProvider); !ok {
+		t.Errorf("Meters = %T, want the SDK's", m.Meters)
+	}
+	if _, ok := m.Tracers.(*sdktrace.TracerProvider); !ok {
+		t.Errorf("Tracers = %T, want the SDK's", m.Tracers)
+	}
+}
+
+// Traces are pushed with OTLP to the endpoint set, and Flush sends what's left.
+func TestStartPushesTraces(t *testing.T) {
+	cleanEnv(t)
+	got := make(chan string, 10)
+	collector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got <- r.Method + " " + r.URL.Path
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(collector.Close)
+	t.Setenv("OTEL_METRICS_EXPORTER", "none")
+	t.Setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", collector.URL+"/v1/traces")
+
+	m, err := Start(t.Context(), Program{Name: "api"}, zerolog.Nop())
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	_, span := m.Tracers.Tracer("test").Start(t.Context(), "GET /tasks", trace.WithSpanKind(trace.SpanKindServer))
+	span.End()
+	var logs bytes.Buffer
+	m.Flush(zerolog.New(&logs))
+
+	select {
+	case req := <-got:
+		if req != "POST /v1/traces" {
+			t.Errorf("collector got %q, want POST /v1/traces", req)
 		}
-		if _, ok := m.Provider.(noop.MeterProvider); !ok {
-			t.Errorf("OTEL_METRICS_EXPORTER=%q: Provider = %T, want the no-op one", value, m.Provider)
+	default:
+		t.Errorf("nothing pushed after Flush; logged %q", logs.String())
+	}
+}
+
+// Only a request or a job run starts a trace; database, key-value store and outside calls are kept
+// only inside a kept one. A job run queued in a trace follows that trace's decision.
+// OTEL_TRACES_SAMPLER_ARG keeps a share of the traces started.
+func TestSampler(t *testing.T) {
+	t.Parallel()
+	// Not span kinds: a parent from another program, kept or not.
+	const remoteKept, remoteDropped = trace.SpanKind(100), trace.SpanKind(101)
+	sampled := func(ratio float64, parent trace.SpanKind, kind trace.SpanKind) bool {
+		tracer := sdktrace.NewTracerProvider(sdktrace.WithSampler(newSampler(ratio))).Tracer("test")
+		ctx := t.Context()
+		if parent == remoteKept || parent == remoteDropped {
+			flags := trace.TraceFlags(0)
+			if parent == remoteKept {
+				flags = trace.FlagsSampled
+			}
+			ctx = trace.ContextWithRemoteSpanContext(ctx, trace.NewSpanContext(trace.SpanContextConfig{
+				TraceID: trace.TraceID{1}, SpanID: trace.SpanID{2}, TraceFlags: flags, Remote: true,
+			}))
+		} else if parent != trace.SpanKindUnspecified {
+			var span trace.Span
+			ctx, span = tracer.Start(ctx, "parent", trace.WithSpanKind(parent))
+			defer span.End()
 		}
-		m.Flush(zerolog.Nop())
+		_, span := tracer.Start(ctx, "span", trace.WithSpanKind(kind))
+		defer span.End()
+		return span.SpanContext().IsSampled()
+	}
+	none := trace.SpanKindUnspecified
+	tests := []struct {
+		name         string
+		ratio        float64
+		parent, kind trace.SpanKind
+		want         bool
+	}{
+		{"a request", 1, none, trace.SpanKindServer, true},
+		{"a job run", 1, none, trace.SpanKindConsumer, true},
+		{"a query outside any", 1, none, trace.SpanKindClient, false},
+		{"a job queued outside any", 1, none, trace.SpanKindProducer, false},
+		{"code's own span outside any", 1, none, trace.SpanKindInternal, false},
+		{"a query in a request", 1, trace.SpanKindServer, trace.SpanKindClient, true},
+		{"a query in a dropped one", 1, trace.SpanKindClient, trace.SpanKindClient, false},
+		{"a request, none kept", 0, none, trace.SpanKindServer, false},
+		{"a job queued in a kept trace, none kept", 0, remoteKept, trace.SpanKindConsumer, true},
+		{"a job queued in a dropped trace", 1, remoteDropped, trace.SpanKindConsumer, false},
+	}
+	for _, tt := range tests {
+		if got := sampled(tt.ratio, tt.parent, tt.kind); got != tt.want {
+			t.Errorf("%s: sampled = %t, want %t", tt.name, got, tt.want)
+		}
+	}
+}
+
+func TestStartReadsSampleRatio(t *testing.T) {
+	cleanEnv(t)
+	t.Setenv("OTEL_METRICS_EXPORTER", "none")
+	t.Setenv("OTEL_TRACES_EXPORTER", "none")
+	for value, wantErr := range map[string]bool{"0": false, "0.25": false, "1": false, "1.5": true, "-0.1": true, "half": true, "NaN": true} {
+		t.Setenv("OTEL_TRACES_SAMPLER_ARG", value)
+		if _, err := Start(t.Context(), Program{Name: "api"}, zerolog.Nop()); (err != nil) != wantErr {
+			t.Errorf("OTEL_TRACES_SAMPLER_ARG=%s: Start() error = %v, want an error: %t", value, err, wantErr)
+		}
+	}
+}
+
+// OTEL_TRACES_SAMPLER naming our sampler (parent-based, by ratio) is accepted, as platforms set
+// it; any other would be ignored next to ours, so it's refused instead.
+func TestStartChecksSampler(t *testing.T) {
+	cleanEnv(t)
+	t.Setenv("OTEL_METRICS_EXPORTER", "none")
+	t.Setenv("OTEL_TRACES_EXPORTER", "none")
+	for value, wantErr := range map[string]bool{
+		"parentbased_traceidratio": false, "parentbased_always_on": false,
+		"always_on": true, "traceidratio": true, "always_off": true,
+	} {
+		t.Setenv("OTEL_TRACES_SAMPLER", value)
+		if _, err := Start(t.Context(), Program{Name: "api"}, zerolog.Nop()); (err != nil) != wantErr {
+			t.Errorf("OTEL_TRACES_SAMPLER=%s: Start() error = %v, want an error: %t", value, err, wantErr)
+		}
+	}
+}
+
+// OTEL_SDK_DISABLED=true, OpenTelemetry's own off switch, turns both off whatever else is set.
+func TestStartDisabled(t *testing.T) {
+	cleanEnv(t)
+	t.Setenv("OTEL_SDK_DISABLED", "true")
+	t.Setenv("OTEL_METRICS_EXPORTER", "otlp")
+
+	m, err := Start(t.Context(), Program{Name: "api"}, zerolog.Nop())
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if _, ok := m.Meters.(noop.MeterProvider); !ok {
+		t.Errorf("Meters = %T, want the no-op one", m.Meters)
+	}
+	if _, ok := m.Tracers.(tracenoop.TracerProvider); !ok {
+		t.Errorf("Tracers = %T, want the no-op one", m.Tracers)
+	}
+}
+
+// An endpoint that's down fails every send: one warn line, then at most one a minute, counting
+// what it skipped.
+func TestLimitedWarn(t *testing.T) {
+	t.Parallel()
+	var logs bytes.Buffer
+	l := &limitedWarn{logger: zerolog.New(&logs), every: time.Minute}
+
+	for range 3 {
+		l.Handle(errors.New("send failed"))
+	}
+	if n := strings.Count(logs.String(), "\n"); n != 1 {
+		t.Fatalf("logged %d lines for 3 errors in a minute, want 1: %s", n, logs.String())
+	}
+	l.last = l.last.Add(-time.Minute)
+	l.Handle(errors.New("send failed"))
+	if n := strings.Count(logs.String(), "\n"); n != 2 || !strings.Contains(logs.String(), `"errors_skipped":2`) {
+		t.Errorf("after a minute: %s, want a second line counting the 2 skipped", logs.String())
 	}
 }
 
@@ -53,7 +231,7 @@ func TestStartPrometheusPage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
-	counter, err := m.Provider.Meter("test").Int64Counter("test.things")
+	counter, err := m.Meters.Meter("test").Int64Counter("test.things")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,6 +278,7 @@ func TestStartServiceNameFromSetting(t *testing.T) {
 func TestStartLogsFailedPushes(t *testing.T) {
 	cleanEnv(t)
 	t.Setenv("OTEL_METRICS_EXPORTER", "otlp")
+	t.Setenv("OTEL_TRACES_EXPORTER", "none")
 	t.Setenv("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT", "http://127.0.0.1:"+strconv.Itoa(freePort(t))+"/v1/metrics")
 	t.Setenv("OTEL_METRIC_EXPORT_INTERVAL", "50")
 	logs := &syncBuffer{}
@@ -204,7 +383,7 @@ func TestStartViews(t *testing.T) {
 		t.Fatalf("Start() error = %v", err)
 	}
 	t.Cleanup(func() { m.Flush(zerolog.Nop()) })
-	meter := m.Provider.Meter("test")
+	meter := m.Meters.Meter("test")
 	useTime, err := meter.Float64Histogram("db.client.connections.use_time", metric.WithUnit("ms"))
 	if err != nil {
 		t.Fatal(err)
@@ -228,7 +407,7 @@ func TestStartDropsHTTPBodySizes(t *testing.T) {
 		t.Fatalf("Start() error = %v", err)
 	}
 	t.Cleanup(func() { m.Flush(zerolog.Nop()) })
-	bodySize, err := m.Provider.Meter("test").Int64Histogram("http.server.request.body.size", metric.WithUnit("By"))
+	bodySize, err := m.Meters.Meter("test").Int64Histogram("http.server.request.body.size", metric.WithUnit("By"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -242,11 +421,13 @@ func TestStartDropsHTTPBodySizes(t *testing.T) {
 // remove:end
 
 func TestStartRefusesConsole(t *testing.T) {
-	cleanEnv(t)
-	t.Setenv("OTEL_METRICS_EXPORTER", "console")
+	for _, name := range []string{"OTEL_METRICS_EXPORTER", "OTEL_TRACES_EXPORTER"} {
+		cleanEnv(t)
+		t.Setenv(name, "console")
 
-	if _, err := Start(t.Context(), Program{Name: "api"}, zerolog.Nop()); err == nil {
-		t.Error("Start() error = nil, want console refused")
+		if _, err := Start(t.Context(), Program{Name: "api"}, zerolog.Nop()); err == nil {
+			t.Errorf("%s=console: Start() error = nil, want it refused", name)
+		}
 	}
 }
 
@@ -256,9 +437,10 @@ func cleanEnv(t *testing.T) {
 	t.Helper()
 	for _, name := range []string{
 		"OTEL_METRICS_EXPORTER", "OTEL_SERVICE_NAME", "OTEL_RESOURCE_ATTRIBUTES", "OTEL_METRICS_PRODUCERS",
-		"OTEL_EXPORTER_OTLP_PROTOCOL", "OTEL_EXPORTER_OTLP_METRICS_PROTOCOL",
-		"OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT", "OTEL_METRIC_EXPORT_INTERVAL",
-		"OTEL_EXPORTER_PROMETHEUS_HOST", "OTEL_EXPORTER_PROMETHEUS_PORT",
+		"OTEL_EXPORTER_OTLP_PROTOCOL", "OTEL_EXPORTER_OTLP_METRICS_PROTOCOL", "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL",
+		"OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT", "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+		"OTEL_METRIC_EXPORT_INTERVAL", "OTEL_EXPORTER_PROMETHEUS_HOST", "OTEL_EXPORTER_PROMETHEUS_PORT",
+		"OTEL_TRACES_EXPORTER", "OTEL_TRACES_SAMPLER", "OTEL_TRACES_SAMPLER_ARG", "OTEL_SDK_DISABLED",
 	} {
 		t.Setenv(name, "")
 	}
@@ -270,7 +452,28 @@ func prometheusEnv(t *testing.T) int {
 	cleanEnv(t)
 	port := freePort(t)
 	t.Setenv("OTEL_METRICS_EXPORTER", "prometheus")
+	t.Setenv("OTEL_TRACES_EXPORTER", "none")
 	t.Setenv("OTEL_EXPORTER_PROMETHEUS_HOST", "127.0.0.1")
 	t.Setenv("OTEL_EXPORTER_PROMETHEUS_PORT", strconv.Itoa(port))
 	return port
+}
+
+// OTEL_TRACES_SAMPLER_ARG reaches the sampler: at 0 a request starts no kept trace.
+func TestStartSamplesByTheRatio(t *testing.T) {
+	cleanEnv(t)
+	t.Setenv("OTEL_METRICS_EXPORTER", "none")
+	t.Setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "http://127.0.0.1:"+strconv.Itoa(freePort(t))+"/v1/traces")
+	t.Setenv("OTEL_TRACES_SAMPLER_ARG", "0")
+
+	m, err := Start(t.Context(), Program{Name: "api"}, zerolog.Nop())
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() { m.Flush(zerolog.Nop()) })
+	_, span := m.Tracers.Tracer("test").Start(t.Context(), "GET /tasks", trace.WithSpanKind(trace.SpanKindServer))
+	defer span.End()
+
+	if span.SpanContext().IsSampled() {
+		t.Error("a request's trace was kept at OTEL_TRACES_SAMPLER_ARG=0")
+	}
 }

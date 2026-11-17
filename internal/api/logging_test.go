@@ -15,6 +15,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/rs/zerolog"
 	"go.opentelemetry.io/otel/metric/noop"
+	tracenoop "go.opentelemetry.io/otel/trace/noop"
 )
 
 // testRouter returns the shared middleware with routes covering each logging case, and the buffer
@@ -22,7 +23,7 @@ import (
 func testRouter(t *testing.T) (http.Handler, *bytes.Buffer) {
 	t.Helper()
 	var logs bytes.Buffer
-	router := newBaseRouter(zerolog.New(&logs), noop.NewMeterProvider(), nil)
+	router := newBaseRouter(zerolog.New(&logs), noop.NewMeterProvider(), tracenoop.NewTracerProvider(), nil)
 	router.Get("/ok", func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("hello"))
 	})
@@ -235,7 +236,7 @@ func serveOnce(t *testing.T, path string, handler http.HandlerFunc) served {
 	t.Helper()
 	var logs bytes.Buffer
 	logger := zerolog.New(&logs)
-	router := newBaseRouter(logger, noop.NewMeterProvider(), nil)
+	router := newBaseRouter(logger, noop.NewMeterProvider(), tracenoop.NewTracerProvider(), nil)
 	router.Get(path, handler)
 
 	server := httptest.NewUnstartedServer(router)
@@ -352,7 +353,7 @@ func TestAbortHandlerPassesThrough(t *testing.T) {
 // and flushing through http.ResponseController (the wrapper has to expose Unwrap).
 func TestResponseControllerWorksThroughLogging(t *testing.T) {
 	t.Parallel()
-	router := newBaseRouter(zerolog.Nop(), noop.NewMeterProvider(), nil)
+	router := newBaseRouter(zerolog.Nop(), noop.NewMeterProvider(), tracenoop.NewTracerProvider(), nil)
 	errs := make(chan error, 2)
 	router.Get("/stream", func(w http.ResponseWriter, _ *http.Request) {
 		rc := http.NewResponseController(w)

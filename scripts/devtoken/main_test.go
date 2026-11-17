@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
+	tracenoop "go.opentelemetry.io/otel/trace/noop"
 
 	"github.com/mdayat/go-template/internal/auth/jwks"
 	"github.com/mdayat/go-template/internal/httpclient"
@@ -31,7 +32,7 @@ func TestTokenIsAcceptedWithThePublishedKeys(t *testing.T) {
 		t.Fatalf("second token() error = %v", err)
 	}
 
-	authn, err := jwks.New(t.Context(), cfg, httpclient.New(time.Second), zerolog.Nop())
+	authn, err := jwks.New(t.Context(), cfg, httpclient.New(time.Second, tracenoop.NewTracerProvider()), zerolog.Nop())
 	if err != nil {
 		t.Fatalf("jwks.New() error = %v", err)
 	}

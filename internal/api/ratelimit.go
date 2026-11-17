@@ -11,6 +11,8 @@ import (
 
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/rs/zerolog"
+	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/mdayat/go-template/internal/ratelimit"
 )
@@ -34,8 +36,9 @@ type Limits struct {
 	Limiter ratelimit.Limiter
 }
 
-// clientIP finds the client's IP for the rate limits and the request log (read it with
-// middleware.GetClientIP). Not from headers like X-Real-IP, which anyone can send: behind trusted
+// clientIP finds the client's IP for the rate limits, the request log (read it with
+// middleware.GetClientIP) and the request's span, whose client.address otelhttp took from
+// X-Forwarded-For whoever sent it. Not from headers like X-Real-IP, which anyone can send: behind trusted
 // proxies only, and only the part of X-Forwarded-For they added. The first request carrying
 // X-Forwarded-For from a sender that isn't a trusted proxy is logged at warn: behind a proxy missing
 // from TRUSTED_PROXIES, every client looks like the proxy and shares its signed-out limit.
@@ -53,6 +56,15 @@ func clientIP(trustedProxies []string, logger zerolog.Logger) func(http.Handler)
 					"if the API is behind a proxy, add its range, or every client behind it shares one rate limit " +
 					"(logged once per copy)")
 			}
+			// Always replaced: otelhttp's is whatever X-Forwarded-For starts with, any text at all.
+			// When the client can't be told, the connection's address, as the request log has it.
+			address := r.RemoteAddr
+			if ip := middleware.GetClientIPAddr(r.Context()); ip.IsValid() {
+				address = ip.String()
+			} else if peer, err := netip.ParseAddrPort(r.RemoteAddr); err == nil {
+				address = peer.Addr().String()
+			}
+			trace.SpanFromContext(r.Context()).SetAttributes(semconv.ClientAddress(address))
 			next.ServeHTTP(w, r)
 		}))
 	}

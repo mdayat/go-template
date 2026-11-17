@@ -18,8 +18,8 @@ HASH := \#
 export DATABASE_URL ?= $(shell sed -nE 's/^(export[[:space:]]+)?DATABASE_URL=//p' .env 2>/dev/null | tail -n 1 \
 	| sed -E -e "s/^\"([^\"]*)\".*/\1/;t" -e "s/^'([^']*)'.*/\1/;t" -e "s/[[:space:]]+$(HASH).*//" -e "s/[[:space:]]+$$//")
 
-.PHONY: fmt lint test test-db-clean vuln build rename image image-migrate db-up db-down metrics-up \
-	metrics-down generate check-generated check-versions migrate-diff migrate-apply
+.PHONY: fmt lint test test-db-clean vuln build rename image image-migrate db-up db-down \
+	telemetry-up telemetry-down generate check-generated check-versions migrate-diff migrate-apply
 
 fmt:
 	$(TOOL) golangci-lint fmt ./...
@@ -109,15 +109,16 @@ run-worker:
 db-up:
 	docker compose up -d --wait
 
-# Prometheus and Grafana for seeing metrics locally (docs/standards/metrics.md).
-metrics-up:
-	docker compose --profile metrics up -d --wait
+# Prometheus, Jaeger and Grafana for seeing metrics and traces locally (docs/standards/metrics.md,
+# docs/standards/tracing.md).
+telemetry-up:
+	docker compose --profile telemetry up -d --wait
 
-metrics-down:
-	docker compose --profile metrics stop prometheus grafana
+telemetry-down:
+	docker compose --profile telemetry stop prometheus jaeger grafana
 
 db-down:
-	docker compose --profile metrics down
+	docker compose --profile telemetry down
 
 # Regenerate internal/db from db/queries and db/schema.sql.
 generate:

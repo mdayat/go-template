@@ -17,7 +17,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"go.opentelemetry.io/otel/metric"
 	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
-	tracenoop "go.opentelemetry.io/otel/trace/noop"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/mdayat/go-template/internal/config"
 )
@@ -68,8 +68,10 @@ func Version(buildVersion string) string {
 
 // ConnectDB returns a pool on url once a connection works, so a wrong URL fails at startup. It
 // records to meters, from the app's side: each query's time (by its sqlc name), and the pool's use
-// (connections in use and idle, waits for a free one), which the database itself can't see.
-func ConnectDB(ctx context.Context, url string, meters metric.MeterProvider) (*pgxpool.Pool, error) {
+// (connections in use and idle, waits for a free one), which the database itself can't see. Each
+// query in a traced request or job is a span in tracers ("query GetTask"), with its SQL but not
+// its values (a failed query's error message can quote one).
+func ConnectDB(ctx context.Context, url string, meters metric.MeterProvider, tracers trace.TracerProvider) (*pgxpool.Pool, error) {
 	cfg, err := pgxpool.ParseConfig(url)
 	if err != nil {
 		// pgx's parse error leaves the password out.
@@ -77,8 +79,12 @@ func ConnectDB(ctx context.Context, url string, meters metric.MeterProvider) (*p
 	}
 	cfg.ConnConfig.Tracer = otelpgx.NewTracer(
 		otelpgx.WithMeterProvider(meters),
-		otelpgx.WithTracerProvider(tracenoop.NewTracerProvider()), // no traces: metrics only
+		otelpgx.WithTracerProvider(tracers),
 		otelpgx.WithMetricOperationName(queryName),
+		otelpgx.WithSpanNameCtxFunc(queryName),
+		// "query GetTask", "prepare GetTask": pgx prepares each query on a connection the first
+		// time, and both steps would otherwise be called GetTask.
+		otelpgx.WithQuerySpanNamePrefix(),
 	)
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
@@ -105,9 +111,9 @@ func ConnectDB(ctx context.Context, url string, meters metric.MeterProvider) (*p
 	return pool, nil
 }
 
-// queryName names a query for its metrics: sqlc's name for it ("GetTask", from its first line,
-// "-- name: GetTask :one"), else its first SQL word ("SELECT"). Never the SQL itself: metrics must
-// keep to a small, fixed set of names.
+// queryName names a query for its metrics and span: sqlc's name for it ("GetTask", from its first
+// line, "-- name: GetTask :one"), else its first SQL word ("SELECT"). Never the SQL itself: metrics
+// must keep to a small, fixed set of names.
 func queryName(ctx context.Context, stmt string) string {
 	if rest, ok := strings.CutPrefix(stmt, "-- name: "); ok {
 		firstLine, _, _ := strings.Cut(rest, "\n")
