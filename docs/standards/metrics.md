@@ -40,7 +40,9 @@ don't overwrite each other's numbers).
   (`db.client.connections.use_time`, milliseconds) and the connections' use, by `pool.name`: what the
   client is for, as `cmd/` names it.
 <!-- remove:end -->
-- **Go runtime** (`go.*`): memory, goroutines, garbage collection.
+- **Go runtime** (`go.*`): memory and its limit (`go.memory.limit`, only when there is one:
+  `GOMEMLIMIT`, or what `startup.LimitMemory` sets from the container's), goroutines, garbage
+  collection.
 
 ## Where they go
 

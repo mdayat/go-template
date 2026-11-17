@@ -99,6 +99,8 @@ and the field sticks to every later line of the whole process.
 
 Startup and shutdown use the global `log.Logger`, each program's lines carrying the build's
 `version`. Libraries' own messages go into the same JSON log, marked with `source`.
+- Every program, first: `memory limit set` (with `memory_limit_bytes`) or `no memory limit`, at
+  warn when the container's limit can't be read (`startup.LimitMemory`).
 <!-- remove:api -->
 - The API: `api listening` (with `addr`), `shutting down`, `api stopped cleanly`; Go's HTTP server
   (a failed accept, a handler writing headers twice) as `source: net/http`.

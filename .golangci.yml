@@ -99,6 +99,14 @@ linters:
               desc: where telemetry goes is set by OTEL_* settings, read in internal/telemetry
             - pkg: go.opentelemetry.io/otel$
               desc: take the provider passed in, not OpenTelemetry's global one
+        memory-limit-library:
+          # Go's memory limit is set once, at start.
+          files:
+            - $all
+            - "!**/internal/startup/*.go"
+          deny:
+            - pkg: github.com/KimMachineGun/automemlimit
+              desc: call startup.LimitMemory from cmd/
         # remove:api
         jwt-library:
           # Tests may use it to make tokens. The test issuer signs them, also for make dev-token.

@@ -68,6 +68,9 @@ func run() error {
 		return err
 	}
 	startup.SetupLogger(cfg.app)
+	if err := startup.LimitMemory(log.Logger); err != nil {
+		return err
+	}
 	version := startup.Version(buildVersion)
 
 	providers, err := telemetry.Start(ctx, telemetry.Program{Name: "worker", Version: version, Env: cfg.app.Env}, log.Logger)

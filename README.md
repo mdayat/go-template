@@ -228,9 +228,9 @@ to follow, not code that's checked):
 
 1. Make a context that ends on SIGINT or SIGTERM (`signal.NotifyContext`).
 2. Load `.env` (`config.Env()`) and read the settings; stop with every problem in one error.
-3. Set up the logger (`startup.SetupLogger`), then connect (`startup.ConnectDB`, with
-   [time limits](docs/standards/database.md#time-limits) fit for its work), closing each
-   connection on the way out.
+3. Set up the logger (`startup.SetupLogger`), set Go's memory limit (`startup.LimitMemory`), then
+   connect (`startup.ConnectDB`, with [time limits](docs/standards/database.md#time-limits) fit
+   for its work), closing each connection on the way out.
 4. Do its work until the context ends, then stop within the time the platform gives between
    SIGTERM and a hard kill (Docker: 10 s by default; Kubernetes and ECS: 30 s).
 5. Return errors to `main`, which logs the one that stopped it and exits 1.
@@ -257,6 +257,15 @@ collector (or your stores) with `OTEL_EXPORTER_OTLP_ENDPOINT`, set
 [tracing.md](docs/standards/tracing.md#where-they-go)). With nothing at the endpoint, each program
 logs a warning once a minute. An empty setting counts as unset (on); `OTEL_SDK_DISABLED=true`
 turns both off.
+
+Give each container a memory limit. Go doesn't read it by itself (it does read the CPU limit), so at
+start each program sets Go's own limit (`GOMEMLIMIT`) to 90% of the container's: near it, Go frees
+memory harder instead of the container killing the program for going past it. The start log shows
+the value, and so does the `go.memory.limit` metric (absent when there's no limit).
+`AUTOMEMLIMIT=0.8` changes the share, `AUTOMEMLIMIT=off` turns this off, and a `GOMEMLIMIT` you set
+(`450MiB`) is kept as it is: set it in the environment, as Go reads it before `.env` is loaded (the
+programs refuse one there). Without a container limit, or one that can't be read (a warning),
+nothing changes.
 
 <!-- remove:api -->
 The API serves `GET /healthz` on port 8080: point the platform's health check at it. The image
