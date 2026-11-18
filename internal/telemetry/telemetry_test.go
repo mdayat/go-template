@@ -239,7 +239,8 @@ func TestStartPrometheusPage(t *testing.T) {
 
 	page := get(t, port)
 	for _, want := range []string{
-		`service_name="go-template-api"`,
+		// From the module path, so it's right after make rename too (TestProjectName has the rule).
+		`service_name="` + serviceName("api") + `"`,
 		`service_version="v1.2.3"`,
 		`deployment_environment_name="development"`,
 		`service_instance_id="`,

@@ -90,17 +90,18 @@ A deleted row is still in the table, so every rule below exists to keep it out o
   `WHERE`: a live row can point at a deleted parent. `sqlc vet` sees one condition and is satisfied,
   so review checks the rest.
 - **Unique rules cover live rows only**: a partial unique index, `CREATE UNIQUE INDEX
-  tasks_title_key ON tasks (title) WHERE deleted_at IS NULL`, not a `UNIQUE` constraint, or a
-  deleted row's title can never be used again. Name the index as the constraint would be named:
-  the service matches the duplicate by that name. Indexes for lists get the same `WHERE`. An
-  `INSERT ... ON CONFLICT (title)` must repeat it (`ON CONFLICT (title) WHERE deleted_at IS NULL`),
-  or Postgres finds no index to match and fails.
+  tasks_title_key ON tasks (owner_id, title) NULLS NOT DISTINCT WHERE deleted_at IS NULL`, not a
+  `UNIQUE` constraint, or a deleted row's title can never be used again. Name the index as the
+  constraint would be named: the service matches the duplicate by that name. Indexes for lists get
+  the same `WHERE`. An `INSERT ... ON CONFLICT (owner_id, title)` must repeat it (`ON CONFLICT
+  (owner_id, title) WHERE deleted_at IS NULL`), or Postgres finds no index to match and fails.
 - **Restoring can break a unique rule** (a live row took the value meanwhile): it's a `Conflict`,
   and the row stays deleted. A restore is a change, so it sets `updated_at`.
 - **`ON DELETE CASCADE` doesn't fire**: nothing is deleted. A child that must go with its parent is
   marked in the same transaction, or its queries join the parent and skip deleted parents.
 - **Deleted rows are removed for good after a while** (30 days is common; for tasks,
-  `task.Service.PurgeDeleted` does it): tables keep growing otherwise, and personal data shouldn't
+  `task.Service.PurgeDeleted` does it, and something must call it on a timetable, or deleted rows
+  stay forever): tables keep growing otherwise, and personal data shouldn't
   stay once a user asked to delete it (privacy laws such as the GDPR give about a month). Records
   the law says to keep (payments, invoices) aren't removed on that timetable.
 - **Adding `deleted_at` to a table in use:** while the deploy runs, the old app still shows rows
@@ -108,7 +109,7 @@ A deleted row is still in the table, so every rule below exists to keep it out o
   `CONCURRENTLY` under a new name in a migration of its own
   ([above](#migrations-that-are-safe-while-the-old-app-runs)), then drop the old constraint in a
   later one, so values stay checked and writes don't wait. Until then a duplicate may be reported
-  under either name: the service matches both.
+  under either name: make the service match both until the old one is dropped.
 
 Soft delete keeps only a row's last state. To know who changed what and when, keep a separate
 history (audit) table.
@@ -136,6 +137,10 @@ Each program sets its own defaults in `settings.go`, to fit its work:
   its job is; and 1 min.
 <!-- remove:end -->
 - **oneoff**: 1 min and 1 min ([why](commands.md)).
+
+Every program reads the same two names, so each needs its own environment: one file shared by all
+would give every program one value (a short limit meant for one would cut another's long
+statements).
 
 A value is a duration (`500ms`, `10s`, `5m`) in whole milliseconds, from 1 ms to 596 hours: 0
 is no limit in Postgres. Set them only through these settings: a program refuses to start if

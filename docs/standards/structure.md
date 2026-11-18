@@ -15,7 +15,7 @@ module can import. Inside `internal/`, these rules are ours:
   or the job queue: the same service serves every entry point. Go refuses import loops, so the
   direction can't flip by accident.
 - **Each entry point has a file per feature**, in the entry point's package, not in the feature's:
-  removing a whole entry point (`make remove`) then takes its files and leaves the features whole.
+  removing a whole entry point then takes its files and leaves the features whole.
 - **A library sits behind our own package** when it may be replaced (`internal/json` for JSON,
   `internal/postgres` for database errors); lint refuses the library anywhere else.
 - **Shared code isn't put in one feature's files**: removing that feature would break the rest. Test
@@ -51,7 +51,7 @@ In the worker:
 |---|---|
 | background jobs: type, payload, limits | `internal/jobs/invoice.go` |
 | job handlers and timetables | `internal/worker/invoice.go`, mounted in `NewMux`, listed in `Schedules` |
-| job tests | `internal/worker/invoice_test.go`, through the real queue |
+| job tests | `internal/worker/invoice_test.go`, through `testWorker(t)` (the real handlers and services, no queue) |
 
 <!-- remove:end -->
 A data fix or backfill for the feature, run once by hand, is a command of `cmd/oneoff`:

@@ -187,7 +187,9 @@ tests), then remove tasks, in one go with your first table:
      internal/api/tasks_test.go`. Replace tasks with your feature in `internal/api/router.go`: the
      `Tasks` field of `api.Services`, its line in `NewServices`, and the `mobile.Tasks{...}` and
      `web.Tasks{...}` lines in `NewRouter`. Keep `internal/api/handler` (paging and path IDs
-     included): your feature's handlers use it.
+     included): your feature's handlers use it. Two tests of the router itself call the example's
+     routes: point `TestClientPrefixes` (`router_test.go`) and `limitedRoute`
+     (`ratelimit_test.go`) at yours.
    <!-- remove:end -->
    <!-- remove:worker -->
    - The worker's part: replace tasks with your feature in `internal/worker/worker.go` (the `Tasks`
@@ -239,12 +241,15 @@ to follow, not code that's checked):
 
 1. Make a context that ends on SIGINT or SIGTERM (`signal.NotifyContext`).
 2. Load `.env` (`config.Env()`) and read the settings; stop with every problem in one error.
-3. Set up the logger (`startup.SetupLogger`), set Go's memory limit (`startup.LimitMemory`), then
-   connect (`startup.ConnectDB`, with [time limits](docs/standards/database.md#time-limits) fit
-   for its work), closing each connection on the way out.
-4. Do its work until the context ends, then stop within the time the platform gives between
+3. Set up the logger (`startup.SetupLogger`) and Go's memory limit (`startup.LimitMemory`). A
+   long-running program also serves profiles if asked (`startup.ServeProfiles`) and starts
+   telemetry (`telemetry.Start`, `Flush` last on the way out); a short one passes no-op providers
+   instead, as `cmd/oneoff` does.
+4. Connect (`startup.ConnectDB`, with [time limits](docs/standards/database.md#time-limits) fit
+   for its work, and the providers from step 3), closing each connection on the way out.
+5. Do its work until the context ends, then stop within the time the platform gives between
    SIGTERM and a hard kill (Docker: 10 s by default; Kubernetes and ECS: 30 s).
-5. Return errors to `main`, which logs the one that stopped it and exits 1.
+6. Return errors to `main`, which logs the one that stopped it and exits 1.
 
 Give it an image: a stage in the `Dockerfile` that copies its binary from the build stage (which
 builds every program in `cmd/`), and an `image-<name>` target in the `Makefile`.
@@ -264,13 +269,13 @@ Build the images with `make image` (on an arm64 Mac, for amd64 servers:
    each program's `settings.go` says which it reads, and `APP_ENV` defaults to `production`). There
    is no `.env` in the images.
 
-Metrics and traces are on, pushed to `http://localhost:4318` unless set otherwise: point them at a
-collector (or your stores) with `OTEL_EXPORTER_OTLP_ENDPOINT`, set
-`OTEL_METRICS_EXPORTER=prometheus` for a page to scrape, or set either exporter to `none`
-([metrics.md](docs/standards/metrics.md#where-they-go),
+In the long-running programs, metrics and traces are on (`cmd/oneoff` sends none), pushed to
+`http://localhost:4318` unless set otherwise: point them at a collector (or your stores) with
+`OTEL_EXPORTER_OTLP_ENDPOINT`, set `OTEL_METRICS_EXPORTER=prometheus` for a page to scrape, or set
+either exporter to `none` ([metrics.md](docs/standards/metrics.md#where-they-go),
 [tracing.md](docs/standards/tracing.md#where-they-go)). With nothing at the endpoint, each program
-logs a warning once a minute. An empty setting counts as unset (on); `OTEL_SDK_DISABLED=true`
-turns both off.
+logs a warning once a minute. An empty setting counts as unset (on); `OTEL_SDK_DISABLED=true` turns
+both off.
 
 Profiles (where CPU and memory go) are off unless `PPROF_ADDR` is set, and then only on the
 machine itself: reach them with a port forward ([profiles](docs/standards/metrics.md#profiles)).

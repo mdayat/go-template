@@ -44,8 +44,8 @@ The HTTP API replies 400, 422, 404 and 409 for them, and has two kinds of its ow
 <!-- remove:api -->
 - The HTTP API replies 500 with the fixed text `internal server error` to an unexpected error.
 <!-- remove:end -->
-- Add a kind only when some caller must react to it differently from the existing ones (sign-in
-  would add an unauthorized kind).
+- Add a kind only when some caller must react to it differently from the existing ones (a payment
+  the provider refused, say, if callers must tell it apart).
 <!-- remove:api -->
 - `problemFor` (`internal/api/handler/handler.go`) maps each kind to a reply; the linter fails
   until a new kind has its own case.

@@ -10,7 +10,7 @@ where one request's or job's time went ([tracing.md](tracing.md)).
 ## What's recorded
 
 Ready-made instrumentation where it exists; our own only where it doesn't. Every metric carries
-the program's `service.name` (`<project>-api`, `<project>-worker`), `service.version`,
+the program's `service.name` (`<project>-<program>`), `service.version`,
 `deployment.environment.name` and `service.instance.id` (new each start, so copies running at once
 don't overwrite each other's numbers).
 

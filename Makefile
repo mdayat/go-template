@@ -1,4 +1,11 @@
+# Plain `make` builds every program, unless a line below (the last wins) runs one instead.
+.DEFAULT_GOAL := build
+# remove:worker
+# Plain `make` runs the worker, unless the API's line below says otherwise.
+.DEFAULT_GOAL := run-worker
+# remove:end
 # remove:api
+# Plain `make` runs the API.
 .DEFAULT_GOAL := run
 # remove:end
 

@@ -108,8 +108,9 @@ The rules for which error to return live in [errors.md](errors.md). Style only:
   or `encoding/json` directly, so the library can be replaced in that one package. Tests may use
   `encoding/json` to check that replies are plain JSON. — lint (depguard)
 - Import pgx only in `internal/postgres` and the code that opens or builds databases
-  (`internal/startup`, `internal/testdb`); services recognise database errors through
-  `internal/postgres`. Tests may use pgx to seed and read rows. — lint (depguard)
+  (`internal/startup`, `internal/testdb`) or runs the one-off commands' transactions
+  (`internal/oneoff`); services recognise database errors through `internal/postgres`. Tests may
+  use pgx to seed and read rows. — lint (depguard)
 <!-- remove:valkey -->
 - Open Valkey connections with `internal/startup` in `cmd/`, and pass them in; tests get theirs
   from `internal/testredis`. go-redis stays in those and in packages named `valkey`, which build on
