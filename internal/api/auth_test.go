@@ -36,7 +36,7 @@ func protectedRouter(t *testing.T, cfg jwks.Config) (http.Handler, *pgxpool.Pool
 	}
 	pool := testdb.New(t)
 	var logs bytes.Buffer
-	router := newBaseRouter(zerolog.New(&logs), noop.NewMeterProvider(), tracenoop.NewTracerProvider(), nil)
+	router := newBaseRouter(zerolog.New(&logs), noop.NewMeterProvider(), tracenoop.NewTracerProvider(), nil, nil)
 	router.With(authenticate(authn, user.NewService(db.New(pool)), nil, nil)).Get("/private", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})

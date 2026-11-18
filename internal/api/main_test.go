@@ -46,6 +46,12 @@ func testAPI(t *testing.T) (http.Handler, *pgxpool.Pool) {
 // issuer.
 func testAPIWith(t *testing.T, limits Limits) (http.Handler, *pgxpool.Pool, *authtest.Issuer) {
 	t.Helper()
+	return testAPIFor(t, limits, nil)
+}
+
+// testAPIFor is testAPIWith with web pages from allowedOrigins allowed to call it.
+func testAPIFor(t *testing.T, limits Limits, allowedOrigins []string) (http.Handler, *pgxpool.Pool, *authtest.Issuer) {
+	t.Helper()
 	pool := testdb.New(t)
 	services := NewServices(
 		db.New(pool),
@@ -54,7 +60,7 @@ func testAPIWith(t *testing.T, limits Limits) (http.Handler, *pgxpool.Pool, *aut
 		// remove:end
 	)
 	authn, issuer := testAuthenticator(t)
-	return NewRouter(zerolog.Nop(), noop.NewMeterProvider(), tracenoop.NewTracerProvider(), services, NewReadiness(pool.Ping, zerolog.Nop()), authn, limits), pool, issuer
+	return NewRouter(zerolog.Nop(), noop.NewMeterProvider(), tracenoop.NewTracerProvider(), services, NewReadiness(pool.Ping, zerolog.Nop()), authn, limits, allowedOrigins), pool, issuer
 }
 
 // testSubject is who testAPI's requests are signed in as.

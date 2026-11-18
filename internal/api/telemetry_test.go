@@ -26,7 +26,7 @@ import (
 func TestObserveRequestsMetrics(t *testing.T) {
 	t.Parallel()
 	rec := metrictest.New()
-	router := newBaseRouter(zerolog.Nop(), rec.Provider, tracenoop.NewTracerProvider(), nil)
+	router := newBaseRouter(zerolog.Nop(), rec.Provider, tracenoop.NewTracerProvider(), nil, nil)
 	router.Get("/tasks/{id}", func(http.ResponseWriter, *http.Request) {})
 	client := request{remoteAddr: "192.0.2.1:1234"}
 
@@ -68,7 +68,7 @@ func TestObserveRequestsMetrics(t *testing.T) {
 func TestObserveRequestsClientGone(t *testing.T) {
 	t.Parallel()
 	rec := metrictest.New()
-	router := newBaseRouter(zerolog.Nop(), rec.Provider, tracenoop.NewTracerProvider(), nil)
+	router := newBaseRouter(zerolog.Nop(), rec.Provider, tracenoop.NewTracerProvider(), nil, nil)
 	router.Get("/slow", func(http.ResponseWriter, *http.Request) {})
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
@@ -87,7 +87,7 @@ func TestObserveRequestsClientGone(t *testing.T) {
 func TestObserveRequestsAborted(t *testing.T) {
 	t.Parallel()
 	rec, spans := metrictest.New(), spantest.New()
-	router := newBaseRouter(zerolog.Nop(), rec.Provider, spans.Provider, nil)
+	router := newBaseRouter(zerolog.Nop(), rec.Provider, spans.Provider, nil, nil)
 	router.Get("/half", func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("partial"))
 		panic("boom")
@@ -118,7 +118,7 @@ func TestObserveRequestsAborted(t *testing.T) {
 func TestObserveRequestsTraces(t *testing.T) {
 	t.Parallel()
 	spans := spantest.New()
-	router := newBaseRouter(zerolog.Nop(), noop.NewMeterProvider(), spans.Provider, nil)
+	router := newBaseRouter(zerolog.Nop(), noop.NewMeterProvider(), spans.Provider, nil, nil)
 	router.Get("/tasks/{id}", func(http.ResponseWriter, *http.Request) {})
 	const theirs = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
 
@@ -159,7 +159,7 @@ func TestObserveRequestsLogTraceIDs(t *testing.T) {
 	t.Parallel()
 	spans := spantest.New()
 	var logs bytes.Buffer
-	router := newBaseRouter(zerolog.New(&logs), noop.NewMeterProvider(), spans.Provider, nil)
+	router := newBaseRouter(zerolog.New(&logs), noop.NewMeterProvider(), spans.Provider, nil, nil)
 	router.Get("/tasks", func(_ http.ResponseWriter, r *http.Request) {
 		zerolog.Ctx(r.Context()).Info().Msg("inside")
 	})
@@ -207,7 +207,7 @@ func TestObserveRequestsNoIDsForDroppedTraces(t *testing.T) {
 	t.Parallel()
 	dropAll := sdktrace.NewTracerProvider(sdktrace.WithSampler(sdktrace.NeverSample()))
 	var logs bytes.Buffer
-	router := newBaseRouter(zerolog.New(&logs), noop.NewMeterProvider(), dropAll, nil)
+	router := newBaseRouter(zerolog.New(&logs), noop.NewMeterProvider(), dropAll, nil, nil)
 	router.Get("/tasks", func(http.ResponseWriter, *http.Request) {})
 
 	request{remoteAddr: "192.0.2.1:1234"}.sendTo(t, router, "/tasks")
@@ -222,7 +222,7 @@ func TestObserveRequestsNoIDsForDroppedTraces(t *testing.T) {
 func TestObserveRequestsTracesOffIgnoresTheCallersTrace(t *testing.T) {
 	t.Parallel()
 	var logs bytes.Buffer
-	router := newBaseRouter(zerolog.New(&logs), metrictest.New().Provider, tracenoop.NewTracerProvider(), nil)
+	router := newBaseRouter(zerolog.New(&logs), metrictest.New().Provider, tracenoop.NewTracerProvider(), nil, nil)
 	router.Get("/tasks", func(_ http.ResponseWriter, r *http.Request) {
 		if sc := trace.SpanContextFromContext(r.Context()); sc.IsValid() {
 			t.Errorf("handler's context holds trace %s, want none", sc.TraceID())
@@ -262,7 +262,7 @@ func TestLogTraceIDsSkipsSpansNotRecorded(t *testing.T) {
 func TestObserveRequestsClientAddressBehindProxy(t *testing.T) {
 	t.Parallel()
 	spans := spantest.New()
-	router := newBaseRouter(zerolog.Nop(), noop.NewMeterProvider(), spans.Provider, []string{"192.0.2.0/24"})
+	router := newBaseRouter(zerolog.Nop(), noop.NewMeterProvider(), spans.Provider, []string{"192.0.2.0/24"}, nil)
 	router.Get("/tasks", func(http.ResponseWriter, *http.Request) {})
 
 	for _, xff := range []string{"203.0.113.9", "alice@example.com", "not an ip, 192.0.2.5"} {
@@ -281,7 +281,7 @@ func TestObserveRequestsClientAddressBehindProxy(t *testing.T) {
 func TestObserveRequestsServerErrorFails(t *testing.T) {
 	t.Parallel()
 	spans := spantest.New()
-	router := newBaseRouter(zerolog.Nop(), noop.NewMeterProvider(), spans.Provider, nil)
+	router := newBaseRouter(zerolog.Nop(), noop.NewMeterProvider(), spans.Provider, nil, nil)
 	router.Get("/tasks", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusInternalServerError) })
 
 	request{remoteAddr: "192.0.2.1:1234"}.sendTo(t, router, "/tasks")

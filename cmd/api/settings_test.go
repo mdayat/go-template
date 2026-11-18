@@ -59,12 +59,16 @@ func TestLoadSettings(t *testing.T) {
 		"DB_IDLE_IN_TRANSACTION_TIMEOUT": "2s",
 		"PPROF_ADDR":                     "127.0.0.1:6060",
 		"SHUTDOWN_DELAY":                 "5s",
+		"CORS_ALLOWED_ORIGINS":           "https://app.example.com",
 	})
 	if err != nil || got.httpAddr != ":9090" {
 		t.Errorf("loadSettings() httpAddr = %q, error = %v; want :9090, nil", got.httpAddr, err)
 	}
 	if want := (startup.DBLimits{MaxConns: 25, Statement: 30 * time.Second, IdleInTransaction: 2 * time.Second}); got.dbLimits != want {
 		t.Errorf("loadSettings() dbLimits = %+v, want %+v", got.dbLimits, want)
+	}
+	if !cmp.Equal(got.allowedOrigins, []string{"https://app.example.com"}) {
+		t.Errorf("loadSettings() allowedOrigins = %q, want [https://app.example.com]", got.allowedOrigins)
 	}
 	if got.shutdownDelay != 5*time.Second {
 		t.Errorf("loadSettings() shutdownDelay = %s, want 5s", got.shutdownDelay)
@@ -207,5 +211,80 @@ func TestLoadSettingsChecksPoolSize(t *testing.T) {
 		if (err == nil) != ok {
 			t.Errorf("DB_MAX_CONNS=%s: loadSettings() error = %v, want ok = %v", value, err, ok)
 		}
+	}
+}
+
+// Each origin is a site exactly as a browser sends it in Origin; anything else would never match,
+// or would open the API to pages it wasn't meant for.
+func TestReadOrigins(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		value, env string
+		want       []string // nil with ok false: refused
+		ok         bool
+	}{
+		{"", "production", nil, true},
+		{"https://app.example.com", "production", []string{"https://app.example.com"}, true},
+		{" https://App.Example.com , https://admin.example.com:8443", "production", []string{"https://app.example.com", "https://admin.example.com:8443"}, true},
+		{"http://localhost:5173", "development", []string{"http://localhost:5173"}, true},
+		{"http://localhost:5173", "production", nil, false},
+		{"*", "development", nil, false},
+		{"https://app.example.com/", "production", nil, false},
+		{"https://app.example.com/web", "production", nil, false},
+		{"https://app.example.com?", "production", nil, false},
+		{"https://user@app.example.com", "production", nil, false},
+		{"app.example.com", "production", nil, false},
+		{"ftp://app.example.com", "production", nil, false},
+		{"https://app.example.com,", "production", nil, false},
+		{"https://*.example.com", "production", nil, false},
+		{"https://*", "production", nil, false},
+		{"https://*example.com", "production", nil, false},
+		{"https://app.example.com:443", "production", nil, false},
+		{"http://localhost:80", "development", nil, false},
+		{"https://app.example.com:", "production", nil, false},
+		{"https://app.example.com:0443", "production", nil, false},
+		{"https://bücher.example", "production", nil, false},
+		{"https://app_name.example.com", "production", nil, false},
+		{"https://xn--bcher-kva.example", "production", []string{"https://xn--bcher-kva.example"}, true},
+		{"http://[::1]:5173", "development", []string{"http://[::1]:5173"}, true},
+		{"http://127.0.0.1:5173", "development", []string{"http://127.0.0.1:5173"}, true},
+		{"http://localhost", "development", []string{"http://localhost"}, true},
+		{"http://127.1:5173", "development", nil, false},
+		{"http://127.000.000.001:5173", "development", nil, false},
+		{"http://2130706433:5173", "development", nil, false},
+		{"http://0x7f.0.0.1:5173", "development", nil, false},
+		{"https://app.123", "production", nil, false},
+		{"http://[0:0:0:0:0:0:0:1]:5173", "development", nil, false},
+		{"http://[::ffff:127.0.0.1]:5173", "development", nil, false},
+		{"http://localhost:65536", "development", nil, false},
+		{"http://localhost:65535", "development", []string{"http://localhost:65535"}, true},
+		{"https://.example.com", "production", nil, false},
+		{"https://app..example.com", "production", nil, false},
+		{"https://app.example.com.", "production", nil, false},
+	}
+	for _, tt := range tests {
+		got, err := readOrigins(tt.value, tt.env)
+		if (err == nil) != tt.ok || !cmp.Equal(got, tt.want) {
+			t.Errorf("readOrigins(%q, %s) = %q, %v; want %q, ok = %v", tt.value, tt.env, got, err, tt.want, tt.ok)
+		}
+		if err != nil && !strings.Contains(err.Error(), "CORS_ALLOWED_ORIGINS") {
+			t.Errorf("readOrigins(%q) error = %q, want it to name CORS_ALLOWED_ORIGINS", tt.value, err)
+		}
+	}
+}
+
+// A bad CORS_ALLOWED_ORIGINS stops the API at start, with the other settings' problems.
+func TestLoadSettingsChecksOrigins(t *testing.T) {
+	t.Parallel()
+	_, err := loadSettings(config.Map{
+		"DATABASE_URL":         "x",
+		"AUTH_JWKS_URL":        "https://keys.example.com/jwks.json",
+		"AUTH_ISSUER":          "i",
+		"AUTH_AUDIENCE":        "a",
+		"REDIS_URL":            "y",
+		"CORS_ALLOWED_ORIGINS": "*",
+	})
+	if err == nil || !strings.Contains(err.Error(), "CORS_ALLOWED_ORIGINS") {
+		t.Errorf("loadSettings() error = %v, want one naming CORS_ALLOWED_ORIGINS", err)
 	}
 }

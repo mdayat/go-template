@@ -23,7 +23,7 @@ import (
 
 func TestHealthzAnswersGetAndHead(t *testing.T) {
 	t.Parallel()
-	router := newBaseRouter(zerolog.Nop(), noop.NewMeterProvider(), tracenoop.NewTracerProvider(), nil)
+	router := newBaseRouter(zerolog.Nop(), noop.NewMeterProvider(), tracenoop.NewTracerProvider(), nil, nil)
 
 	for _, method := range []string{http.MethodGet, http.MethodHead} {
 		rec := httptest.NewRecorder()
@@ -70,7 +70,7 @@ func TestClientPrefixes(t *testing.T) {
 			// remove:worker
 			valkey.NewEnqueuer(testredis.New(t), tracenoop.NewTracerProvider()),
 			// remove:end
-		), NewReadiness(pool.Ping, zerolog.Nop()), authn, Limits{})
+		), NewReadiness(pool.Ping, zerolog.Nop()), authn, Limits{}, nil)
 	token := issuer.Token(testSubject)
 
 	tests := []struct {
@@ -123,7 +123,7 @@ func TestClientPrefixes(t *testing.T) {
 // error reply never.
 func TestRepliesAreNotCached(t *testing.T) {
 	t.Parallel()
-	router := newBaseRouter(zerolog.Nop(), noop.NewMeterProvider(), tracenoop.NewTracerProvider(), nil)
+	router := newBaseRouter(zerolog.Nop(), noop.NewMeterProvider(), tracenoop.NewTracerProvider(), nil, nil)
 	router.Get("/private", func(w http.ResponseWriter, _ *http.Request) {
 		handler.WriteJSON(w, http.StatusOK, "application/json", struct{}{})
 	})

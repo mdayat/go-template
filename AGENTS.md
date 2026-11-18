@@ -106,6 +106,8 @@ outside `cmd/`.
   `NewRouter` from `api.Limits`, counted through `ratelimit.Limiter` (`cmd/api` picks Valkey's).
   Never read a client's IP from a header yourself: use `middleware.GetClientIP`, which trusts
   `X-Forwarded-For` only from `TRUSTED_PROXIES`.
+- Web pages on other sites may call the API only from `CORS_ALLOWED_ORIGINS` (`allowOrigins`); never
+  `*`, and no cookies (sign-in is a bearer token).
 
 <!-- remove:end -->
 **Logging** ([logging.md](docs/standards/logging.md))

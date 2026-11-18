@@ -311,6 +311,10 @@ running ones up to 8 s, closes whatever is left and exits.
 Behind a load balancer or CDN, set `TRUSTED_PROXIES` to its IP ranges, or every signed-out client
 shares one rate limit (the proxy's); see [rate limits](docs/standards/http-api.md#rate-limits).
 
+A web app on another site than the API's (`app.example.com` calling `api.example.com`) needs its
+site in `CORS_ALLOWED_ORIGINS`, or the browser refuses it every reply
+([CORS](docs/standards/http-api.md#web-pages-on-other-sites-cors)).
+
 Set `AUTH_JWKS_URL`, `AUTH_ISSUER` and `AUTH_AUDIENCE` to your sign-in provider's (an https://
 keys URL that answers 200 itself, not a redirect; the API refuses anything else in production).
 Each copy of the API fetches the keys at start (up to 5 s) and every hour; if the provider can't

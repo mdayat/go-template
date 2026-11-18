@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/netip"
 	"net/url"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/mdayat/go-template/internal/api"
@@ -26,6 +28,9 @@ type settings struct {
 	// shutdownDelay is how long the API keeps serving after SIGTERM with /readyz failing, so load
 	// balancers stop sending it requests before it stops taking them.
 	shutdownDelay time.Duration
+	// allowedOrigins are the sites whose web pages may call the API from a browser; none: no other
+	// site's.
+	allowedOrigins []string
 }
 
 // loadSettings reads the API's settings from sources, the first winning, and reports every missing
@@ -58,8 +63,11 @@ func loadSettings(sources ...config.Source) (settings, error) {
 		pprofAddr:     r.String("PPROF_ADDR", ""),
 		shutdownDelay: r.Duration("SHUTDOWN_DELAY", 0),
 	}
+	origins, originsErr := readOrigins(r.String("CORS_ALLOWED_ORIGINS", ""), s.app.Env)
+	s.allowedOrigins = origins
 	err := errors.Join(r.Err(), checkKeysURL(s.app.Env, s.auth.KeysURL), checkTrustedProxies(s.limits.TrustedProxies),
-		startup.CheckProfileAddr(s.pprofAddr), checkShutdownDelay(s.shutdownDelay), startup.CheckMaxConns(s.dbLimits.MaxConns))
+		startup.CheckProfileAddr(s.pprofAddr), checkShutdownDelay(s.shutdownDelay), startup.CheckMaxConns(s.dbLimits.MaxConns),
+		originsErr)
 	if err != nil {
 		return settings{}, err
 	}
@@ -112,4 +120,69 @@ func checkShutdownDelay(d time.Duration) error {
 		return fmt.Errorf("SHUTDOWN_DELAY must be at most %s, got %s", maxShutdownDelay, d)
 	}
 	return nil
+}
+
+// readOrigins reads CORS_ALLOWED_ORIGINS, a comma-separated list of sites written as a browser
+// sends them in Origin: scheme, host and a port if not the scheme's own (https://app.example.com,
+// http://localhost:5173), with nothing after. Each must be named: a "*" anywhere is a wildcard to
+// rs/cors ("https://*" lets a page on any site read the API's replies, "https://*example.com"
+// also evilexample.com). In production only https:// will do: a page served over plain http can be
+// changed by anyone on its network. An entry a browser never sends (a default port, :443; a
+// non-ASCII host, sent in its xn-- form) would never match, so it's refused too. Returned
+// lowercase, as browsers send them.
+func readOrigins(value, env string) ([]string, error) {
+	if value == "" {
+		return nil, nil
+	}
+	var origins []string
+	for entry := range strings.SplitSeq(value, ",") {
+		entry = strings.TrimSpace(entry)
+		u, err := url.Parse(entry)
+		switch {
+		case entry == "*":
+			return nil, errors.New("CORS_ALLOWED_ORIGINS must name each site, not *")
+		// Anything besides scheme://host[:port] (a path, a trailing /, ?, #, user@) changes the text.
+		case err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" ||
+			strings.ToLower(entry) != u.Scheme+"://"+strings.ToLower(u.Host):
+			return nil, fmt.Errorf("CORS_ALLOWED_ORIGINS: %q isn't a site like https://app.example.com (scheme and host, nothing after)", entry)
+		case !isOriginHost(u):
+			return nil, fmt.Errorf("CORS_ALLOWED_ORIGINS: %q must name one site as a browser writes it: a name of letters, digits, - and ., or an IP address in its shortest form, and a port only if not the scheme's own (no *)", entry)
+		case u.Scheme == "http" && env == config.EnvProduction:
+			return nil, fmt.Errorf("CORS_ALLOWED_ORIGINS: %q must be https:// in production", entry)
+		}
+		origins = append(origins, strings.ToLower(entry))
+	}
+	return origins, nil
+}
+
+// isOriginHost reports whether u's host and port are written as a browser writes them in Origin:
+// an IP address in its shortest form (127.0.0.1, [::1]; not 127.1 or [0:0:0:0:0:0:0:1]), or a
+// name of ASCII letters, digits, "-" and "." whose last part isn't a number (a browser reads
+// 127.000.000.001 as an address and rewrites it); and a port, if any, from 1 to 65535, without
+// leading zeros, and not the scheme's own.
+func isOriginHost(u *url.URL) bool {
+	if port := u.Port(); strings.HasSuffix(u.Host, ":") || port != "" && !isOriginPort(port, u.Scheme) {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	if ip, err := netip.ParseAddr(host); err == nil {
+		return ip.String() == host && !ip.Is4In6()
+	}
+	if host == "" || strings.HasPrefix(host, ".") || strings.HasSuffix(host, ".") || strings.Contains(host, "..") {
+		return false
+	}
+	for _, c := range host {
+		if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '-' && c != '.' {
+			return false
+		}
+	}
+	last := host[strings.LastIndex(host, ".")+1:]
+	return strings.TrimLeft(last, "0123456789") != "" && !strings.HasPrefix(last, "0x")
+}
+
+// isOriginPort reports whether port is one a browser keeps in Origin for scheme.
+func isOriginPort(port, scheme string) bool {
+	n, err := strconv.Atoi(port)
+	defaultPort := map[string]int{"https": 443, "http": 80}[scheme]
+	return err == nil && n >= 1 && n <= 65535 && port[0] != '0' && n != defaultPort
 }

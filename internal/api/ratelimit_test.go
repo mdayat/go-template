@@ -292,7 +292,7 @@ func TestRateLimitWithoutLimiterPanics(t *testing.T) {
 			t.Error("NewRouter() with a limit and no Limiter didn't panic")
 		}
 	}()
-	NewRouter(zerolog.Nop(), noop.NewMeterProvider(), tracenoop.NewTracerProvider(), Services{}, nil, nil, Limits{PerIP: 1})
+	NewRouter(zerolog.Nop(), noop.NewMeterProvider(), tracenoop.NewTracerProvider(), Services{}, nil, nil, Limits{PerIP: 1}, nil)
 }
 
 // Load balancers check the health route often, from few IPs: it's never limited.
@@ -328,7 +328,7 @@ func TestRateLimitZeroIsOff(t *testing.T) {
 func TestUntrustedForwardedForIsLoggedOnce(t *testing.T) {
 	t.Parallel()
 	var logs bytes.Buffer
-	router := newBaseRouter(zerolog.New(&logs), noop.NewMeterProvider(), tracenoop.NewTracerProvider(), []string{"10.0.0.0/8"})
+	router := newBaseRouter(zerolog.New(&logs), noop.NewMeterProvider(), tracenoop.NewTracerProvider(), []string{"10.0.0.0/8"}, nil)
 	router.Get("/ok", func(http.ResponseWriter, *http.Request) {})
 
 	warnings := func() int {
@@ -397,7 +397,7 @@ func TestLogNamesTheClient(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			var logs bytes.Buffer
-			router := newBaseRouter(zerolog.New(&logs), noop.NewMeterProvider(), tracenoop.NewTracerProvider(), tt.trustedProxies)
+			router := newBaseRouter(zerolog.New(&logs), noop.NewMeterProvider(), tracenoop.NewTracerProvider(), tt.trustedProxies, nil)
 			router.Get("/ok", func(http.ResponseWriter, *http.Request) {})
 
 			tt.rq.sendTo(t, router, "/ok")

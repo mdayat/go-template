@@ -130,7 +130,7 @@ func run() error {
 	ready := api.NewReadiness(startup.DBReady(pool), log.Logger)
 	server := &http.Server{
 		BaseContext:       func(net.Listener) context.Context { return handler.WithShutdown(base, base) },
-		Handler:           api.NewRouter(log.Logger, providers.Meters, providers.Tracers, services, ready, authn, cfg.limits),
+		Handler:           api.NewRouter(log.Logger, providers.Meters, providers.Tracers, services, ready, authn, cfg.limits, cfg.allowedOrigins),
 		ErrorLog:          api.ServerErrorLog(log.Logger),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,

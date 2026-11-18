@@ -219,6 +219,43 @@ log shows as `client.ip`.
 To count somewhere else, give `api.Limits` another `ratelimit.Limiter` in `cmd/api/main.go`: for a
 single copy, `ratelimit.NewMemory()`. Handlers and services don't change.
 
+## Web pages on other sites (CORS)
+
+A browser lets a web page read replies only from its own site (scheme, host and port), unless the
+other site's server says it may: CORS. Mobile apps and servers aren't affected. So a web app served
+from `https://app.example.com` that calls `https://api.example.com` needs its site in
+`CORS_ALLOWED_ORIGINS` (comma-separated, each as the browser sends it in `Origin`:
+`https://app.example.com`, `http://localhost:5173`). Unset, no other site's pages may; serving the
+web app and the API from one site needs none.
+
+`allowOrigins` (`internal/api/cors.go`, [rs/cors](https://github.com/rs/cors)) then answers every
+preflight (an `OPTIONS` request with `Access-Control-Request-Method`, which the browser sends
+first, without a token) itself with a 204, before sign-in and the rate limits; only an allowed
+site's gets the headers that let the browser go on, and the browser keeps that answer up to two
+hours. Every reply to an allowed site, errors included, says the page may read it, and which
+headers besides the basic ones: `Location`, `X-Request-Id`, `X-RateLimit-*` and `Retry-After`.
+Pages may send `Authorization` and `Content-Type`, with the methods the routes use; a page that
+sends another header (a browser tracing library's `traceparent`) fails its preflight until the
+header is added to `AllowedHeaders`.
+
+Each site is named, exactly as the browser sends it: a `*` anywhere is refused (rs/cors would read
+it as a wildcard), and so are `http://` in production (a page over plain http can be changed on its
+way to the browser), a default port (`:443`) and a non-ASCII host (write its `xn--` form), which
+the browser never sends. Cookies aren't allowed: sign-in is a bearer token. A project that signs in
+by cookie must allow credentials and protect against requests forged from other sites (CSRF).
+Chrome also blocks a public site's page from calling an API on a private address or this machine
+(Private Network Access), which this doesn't allow.
+
+A preflight is answered before a route is picked, so its log line and metrics have no route (an
+`OPTIONS` with an empty `http.route`), and it gets a 204 on any path, even one no route serves.
+Every reply carries `Vary: Origin`, so a cache keeps one copy per site: a handler that sets `Vary`
+must add to it (`w.Header().Add`), never replace it.
+
+Not needed: leave `CORS_ALLOWED_ORIGINS` unset. To take the code out too: delete
+`internal/api/cors.go` and `cors_test.go`, fix what no longer compiles (the `allowedOrigins`
+argument, `readOrigins` in `cmd/api/settings.go`), remove the setting from `.example.env`, then
+`go mod tidy`.
+
 ## IDs and paging
 
 - An ID that isn't a valid UUID is a 404, the same as an unknown one: it can't name anything.

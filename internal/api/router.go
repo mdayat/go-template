@@ -63,7 +63,8 @@ func NewServices(
 
 // NewRouter returns the API's routes, each request logged to logger, measured to meters and traced
 // to tracers. Every route but the health and readiness checks needs someone signed in, as authn
-// says, and is rate limited as limits says. /readyz answers as ready says.
+// says, and is rate limited as limits says. /readyz answers as ready says. Web pages from
+// allowedOrigins may call it from a browser (see allowOrigins); none: no page from another site.
 //
 // Each client has its routes under its own prefix, in its own package, so one client's replies can
 // change without touching another's (docs/standards/http-api.md): /mobile/v1 (internal/api/mobile:
@@ -71,9 +72,9 @@ func NewServices(
 // app) and /admin (internal/api/admin: admins only). All of them call the same services.
 func NewRouter(
 	logger zerolog.Logger, meters metric.MeterProvider, tracers trace.TracerProvider,
-	services Services, ready *Readiness, authn Authenticator, limits Limits,
+	services Services, ready *Readiness, authn Authenticator, limits Limits, allowedOrigins []string,
 ) *chi.Mux {
-	router := newBaseRouter(logger, meters, tracers, limits.TrustedProxies)
+	router := newBaseRouter(logger, meters, tracers, limits.TrustedProxies, allowedOrigins)
 	router.Get(readyPath, ready.serve)
 	// One decoder for every client: the validator caches what it learns about each type.
 	decoder := handler.NewDecoder()
@@ -110,9 +111,10 @@ func NewRouter(
 
 // newBaseRouter returns a router with the middleware every route shares, the health check, and
 // problem replies for unmatched paths and methods. Features add their routes to it. The client's
-// IP is read as Limits.TrustedProxies says.
+// IP is read as Limits.TrustedProxies says; web pages from allowedOrigins may call it.
 func newBaseRouter(
 	logger zerolog.Logger, meters metric.MeterProvider, tracers trace.TracerProvider, trustedProxies []string,
+	allowedOrigins []string,
 ) *chi.Mux {
 	router := chi.NewRouter()
 	router.Use(
@@ -126,6 +128,9 @@ func newBaseRouter(
 		hlog.RequestIDHandler("request_id", "X-Request-Id"),
 		noStore,
 		logRequests,
+		// After logRequests, so a preflight it answers is logged; before every route's checks, so a
+		// refused request (401, 429) still carries the headers the page needs to read it.
+		allowOrigins(allowedOrigins),
 		// After logRequests: its own context has no deadline, so a timed-out request is logged as
 		// the 503 it got, not as a client that hung up (499).
 		limitRequestTime(RequestTimeout),

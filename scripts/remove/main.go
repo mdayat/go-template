@@ -56,7 +56,7 @@ func mentions() map[string][]string {
 			"cmd/api", "internal/api", "http-api.md", "HTTP_ADDR", "testAPI", "/healthz",
 			"internal/auth", "devtoken", "dev-token", "AUTH_JWKS_URL", "AUTH_ISSUER", "AUTH_AUDIENCE",
 			"TRUSTED_PROXIES", "RATE_LIMIT_PER_IP", "RATE_LIMIT_PER_USER", "internal/ratelimit", "redis_rate",
-			"otelhttp", "http.server.request.duration", "api.json", "/readyz", "SHUTDOWN_DELAY",
+			"otelhttp", "http.server.request.duration", "api.json", "/readyz", "SHUTDOWN_DELAY", "CORS_ALLOWED_ORIGINS",
 		},
 		"worker": {
 			"cmd/worker", "internal/worker", "internal/jobs", "internal/queue", "testqueue", "worker.md",

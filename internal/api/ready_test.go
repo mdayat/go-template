@@ -130,7 +130,7 @@ func TestReadyzIgnoresACallerThatLeft(t *testing.T) {
 
 // readyRouter is the base router, logging requests to logger, with /readyz answered by ready.
 func readyRouter(logger zerolog.Logger, ready *Readiness) *chi.Mux {
-	router := newBaseRouter(logger, noop.NewMeterProvider(), tracenoop.NewTracerProvider(), nil)
+	router := newBaseRouter(logger, noop.NewMeterProvider(), tracenoop.NewTracerProvider(), nil, nil)
 	router.Get(readyPath, ready.serve)
 	return router
 }
