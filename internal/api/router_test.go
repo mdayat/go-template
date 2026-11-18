@@ -86,6 +86,9 @@ func TestClientPrefixes(t *testing.T) {
 		{http.MethodGet, "/mobile/v1/nowhere", false, 404, "/mobile/v1/*", ""},
 		{http.MethodGet, "/admin/nowhere", true, 404, "/admin/*", ""},
 		{http.MethodGet, "/nowhere", false, 404, "", ""},
+		// Profiles are only on their own local port (startup.ServeProfiles), never the API's.
+		{http.MethodGet, "/debug/pprof/", false, 404, "", ""},
+		{http.MethodGet, "/admin/debug/pprof/heap", true, 404, "/admin/*", ""},
 		{http.MethodOptions, "/web/tasks", false, 405, "/web/*", "GET, HEAD, POST"},
 		{http.MethodDelete, "/mobile/v1/tasks", false, 405, "/mobile/v1/*", "GET, HEAD, POST"},
 		{http.MethodHead, "/web/tasks", true, 200, "/web/tasks", ""},

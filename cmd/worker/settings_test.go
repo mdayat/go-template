@@ -38,11 +38,11 @@ func TestLoadSettings(t *testing.T) {
 
 func TestLoadSettingsNamesEveryMissingOrInvalidSetting(t *testing.T) {
 	t.Parallel()
-	_, err := loadSettings(config.Map{"PURGE_WEBHOOK_URL": "hooks.example.com", "DB_STATEMENT_TIMEOUT": "0"})
+	_, err := loadSettings(config.Map{"PURGE_WEBHOOK_URL": "hooks.example.com", "DB_STATEMENT_TIMEOUT": "0", "PPROF_ADDR": "0.0.0.0:6060"})
 	if err == nil {
-		t.Fatal("loadSettings() error = nil, want one naming DATABASE_URL, REDIS_URL, PURGE_WEBHOOK_URL and DB_STATEMENT_TIMEOUT")
+		t.Fatal("loadSettings() error = nil, want one naming every bad setting")
 	}
-	for _, name := range []string{"DATABASE_URL", "REDIS_URL", "PURGE_WEBHOOK_URL", "DB_STATEMENT_TIMEOUT"} {
+	for _, name := range []string{"DATABASE_URL", "REDIS_URL", "PURGE_WEBHOOK_URL", "DB_STATEMENT_TIMEOUT", "PPROF_ADDR"} {
 		if !strings.Contains(err.Error(), name) {
 			t.Errorf("loadSettings() error = %q, want it to name %s", err, name)
 		}

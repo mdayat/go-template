@@ -56,12 +56,16 @@ func TestLoadSettings(t *testing.T) {
 
 		"DB_STATEMENT_TIMEOUT":           "30s",
 		"DB_IDLE_IN_TRANSACTION_TIMEOUT": "2s",
+		"PPROF_ADDR":                     "127.0.0.1:6060",
 	})
 	if err != nil || got.httpAddr != ":9090" {
 		t.Errorf("loadSettings() httpAddr = %q, error = %v; want :9090, nil", got.httpAddr, err)
 	}
 	if want := (startup.DBLimits{Statement: 30 * time.Second, IdleInTransaction: 2 * time.Second}); got.dbLimits != want {
 		t.Errorf("loadSettings() dbLimits = %+v, want %+v", got.dbLimits, want)
+	}
+	if got.pprofAddr != "127.0.0.1:6060" {
+		t.Errorf("loadSettings() pprofAddr = %q, want 127.0.0.1:6060", got.pprofAddr)
 	}
 	wantLimits := api.Limits{TrustedProxies: []string{"10.0.0.0/8", "2001:db8::/32"}, PerIP: 0, PerUser: 30}
 	if diff := cmp.Diff(wantLimits, got.limits); diff != "" {
@@ -145,5 +149,21 @@ func TestLoadSettingsChecksTrustedProxies(t *testing.T) {
 		if (err == nil) != tt.ok {
 			t.Errorf("TRUSTED_PROXIES=%s: loadSettings() error = %v, want ok = %v", tt.value, err, tt.ok)
 		}
+	}
+}
+
+// Profiles are never on the network (startup.CheckProfileAddr has the cases).
+func TestLoadSettingsKeepsProfilesLocal(t *testing.T) {
+	t.Parallel()
+	_, err := loadSettings(config.Map{
+		"DATABASE_URL":  "postgres://localhost/app",
+		"AUTH_JWKS_URL": "https://keys.example.com/jwks.json",
+		"AUTH_ISSUER":   "https://issuer.example.com",
+		"AUTH_AUDIENCE": "app",
+		"REDIS_URL":     "redis://localhost:6379/0",
+		"PPROF_ADDR":    ":6060",
+	})
+	if err == nil || !strings.Contains(err.Error(), "PPROF_ADDR") {
+		t.Errorf("loadSettings(PPROF_ADDR=:6060) error = %v, want one naming PPROF_ADDR", err)
 	}
 }

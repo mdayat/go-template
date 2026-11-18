@@ -106,6 +106,8 @@ Startup and shutdown use the global `log.Logger`, each program's lines carrying 
 `version`. Libraries' own messages go into the same JSON log, marked with `source`.
 - Every program, first: `memory limit set` (with `memory_limit_bytes`) or `no memory limit`, at
   warn when the container's limit can't be read (`startup.LimitMemory`).
+- With `PPROF_ADDR` set: `profiling on` (with `addr`) at warn, so it isn't left on unnoticed;
+  `profiles stopped` at error if that server fails (`startup.ServeProfiles`).
 <!-- remove:api -->
 - The API: `api listening` (with `addr`), `shutting down`, `api stopped cleanly`; Go's HTTP server
   (a failed accept, a handler writing headers twice) as `source: net/http`.

@@ -111,3 +111,33 @@ scrape config.
 `internal/metrictest` records in memory: give `metrictest.New().Provider` to the code, then check
 `Collect(t).Find(name, attributes)`. `noop.NewMeterProvider()` (`go.opentelemetry.io/otel/metric/noop`)
 records nothing, for tests about something else.
+
+## Profiles
+
+Metrics say a program is slow or growing; a profile says where: which functions use the CPU, what
+holds memory, what every goroutine is waiting on. Go records them itself
+([`net/http/pprof`](https://pkg.go.dev/net/http/pprof)); the long-running programs serve them
+only when `PPROF_ADDR` is set, on that port of their own (`startup.ServeProfiles`).
+
+```sh
+PPROF_ADDR=127.0.0.1:6060 go run ./cmd/<program>
+go tool pprof -http=:8081 'http://127.0.0.1:6060/debug/pprof/profile?seconds=30'   # CPU
+go tool pprof -http=:8081 'http://127.0.0.1:6060/debug/pprof/heap'                 # memory
+curl 'http://127.0.0.1:6060/debug/pprof/goroutine?debug=2'                      # every goroutine
+```
+
+- **Only on this machine**: `PPROF_ADDR` must be `127.0.0.1`, `::1` or `localhost` with a port,
+  or the program refuses to start. Profiles show the program's insides (its stacks, what's in
+  memory), so they never go on the network: reach a server's with a port forward
+  (`kubectl port-forward pod/<pod> 6060`), or in plain Docker from a container sharing its network
+  (`docker run --rm --network container:<name> curlimages/curl ...`; `-p` can't reach
+  127.0.0.1 inside), and unset it once done. Programs sharing one network (an API and a worker in
+  one pod) need different ports.
+- **Off by default**: a port nobody uses is one more to secure. When on, the program logs
+  `profiling on` at warn at start.
+- A profile over time (`?seconds=`, whole seconds: CPU, 30 by default; a trace, which takes
+  fractions; or a heap or block profile's difference over that time) lasts up to 60 seconds, and
+  slows the program a little meanwhile. Some pages pause it outright: `goroutine?debug=2` while it
+  writes every goroutine's stack, `heap?gc=1` for a full garbage collection. Only GET is served
+  (and POST for `symbol`, up to 1 MiB). `cmdline` isn't: it shows the program's arguments.
+

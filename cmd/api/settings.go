@@ -21,6 +21,7 @@ type settings struct {
 	auth        jwks.Config // whose sign-in tokens to accept
 	limits      api.Limits  // all but Limiter, which run sets
 	redisURL    string      // the Valkey that every copy of the API shares
+	pprofAddr   string      // where to serve profiles; "" serves none
 }
 
 // loadSettings reads the API's settings from sources, the first winning, and reports every missing
@@ -48,9 +49,11 @@ func loadSettings(sources ...config.Source) (settings, error) {
 			PerIP:          r.Count("RATE_LIMIT_PER_IP", 600),
 			PerUser:        r.Count("RATE_LIMIT_PER_USER", 120),
 		},
-		redisURL: r.Required("REDIS_URL"),
+		redisURL:  r.Required("REDIS_URL"),
+		pprofAddr: r.String("PPROF_ADDR", ""),
 	}
-	err := errors.Join(r.Err(), checkKeysURL(s.app.Env, s.auth.KeysURL), checkTrustedProxies(s.limits.TrustedProxies))
+	err := errors.Join(r.Err(), checkKeysURL(s.app.Env, s.auth.KeysURL), checkTrustedProxies(s.limits.TrustedProxies),
+		startup.CheckProfileAddr(s.pprofAddr))
 	if err != nil {
 		return settings{}, err
 	}

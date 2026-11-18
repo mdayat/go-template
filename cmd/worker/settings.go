@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"time"
 
 	"github.com/mdayat/go-template/internal/config"
@@ -15,6 +16,7 @@ type settings struct {
 	redisURL    string // the job queue
 	// purgeWebhookURL gets a report after each purge; "" sends none.
 	purgeWebhookURL string
+	pprofAddr       string // where to serve profiles; "" serves none
 }
 
 // loadSettings reads the worker's settings from sources, the first winning, and reports every
@@ -33,8 +35,9 @@ func loadSettings(sources ...config.Source) (settings, error) {
 		redisURL: r.Required("REDIS_URL"),
 
 		purgeWebhookURL: r.OptionalHTTPURL("PURGE_WEBHOOK_URL"),
+		pprofAddr:       r.String("PPROF_ADDR", ""),
 	}
-	if err := r.Err(); err != nil {
+	if err := errors.Join(r.Err(), startup.CheckProfileAddr(s.pprofAddr)); err != nil {
 		return settings{}, err
 	}
 	return s, nil

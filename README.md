@@ -272,6 +272,9 @@ collector (or your stores) with `OTEL_EXPORTER_OTLP_ENDPOINT`, set
 logs a warning once a minute. An empty setting counts as unset (on); `OTEL_SDK_DISABLED=true`
 turns both off.
 
+Profiles (where CPU and memory go) are off unless `PPROF_ADDR` is set, and then only on the
+machine itself: reach them with a port forward ([profiles](docs/standards/metrics.md#profiles)).
+
 Give each container a memory limit. Go doesn't read it by itself (it does read the CPU limit), so at
 start each program sets Go's own limit (`GOMEMLIMIT`) to 90% of the container's: near it, Go frees
 memory harder instead of the container killing the program for going past it. The start log shows

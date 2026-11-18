@@ -71,6 +71,11 @@ func run() error {
 	if err := startup.LimitMemory(log.Logger); err != nil {
 		return err
 	}
+	stopProfiles, err := startup.ServeProfiles(ctx, cfg.pprofAddr, log.Logger)
+	if err != nil {
+		return err
+	}
+	defer stopProfiles()
 	version := startup.Version(buildVersion)
 
 	providers, err := telemetry.Start(ctx, telemetry.Program{Name: "worker", Version: version, Env: cfg.app.Env}, log.Logger)
