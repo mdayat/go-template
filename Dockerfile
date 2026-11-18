@@ -5,7 +5,7 @@
 # refuses to build.
 # The compiler runs on the build machine's platform and cross-compiles for the target one (e.g.
 # --platform linux/amd64 from an arm64 Mac), instead of running slowly under emulation.
-FROM --platform=$BUILDPLATFORM golang:1.26.11-alpine@sha256:ecb67f987aa1a57794c91d19ade7ae0209f2f0f5496aaef9e6ae85ddf92d02ab AS build
+FROM --platform=$BUILDPLATFORM golang:1.27.3-alpine@sha256:fa3d596898d9f126af7c01d14ee7597bab3f39cccf392ef36b69fe77cd681f18 AS build
 ARG TARGETOS TARGETARCH
 WORKDIR /src
 COPY go.mod go.sum ./
