@@ -67,6 +67,7 @@ func TestClientPrefixes(t *testing.T) {
 	router := NewRouter(zerolog.New(&logs), noop.NewMeterProvider(), tracenoop.NewTracerProvider(),
 		NewServices(
 			db.New(pool),
+			testReplies(t),
 			// remove:worker
 			valkey.NewEnqueuer(testredis.New(t), tracenoop.NewTracerProvider()),
 			// remove:end

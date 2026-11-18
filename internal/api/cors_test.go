@@ -24,7 +24,7 @@ func corsRequest(t *testing.T, router http.Handler, method, target, origin, toke
 	req.Header.Set("Origin", origin)
 	if preflight {
 		req.Header.Set("Access-Control-Request-Method", http.MethodPost)
-		req.Header.Set("Access-Control-Request-Headers", "authorization,content-type")
+		req.Header.Set("Access-Control-Request-Headers", "authorization,content-type,idempotency-key")
 	}
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
@@ -60,7 +60,7 @@ func TestCORSPreflight(t *testing.T) {
 		want := map[string]string{
 			"Access-Control-Allow-Origin":  allowedSite,
 			"Access-Control-Allow-Methods": http.MethodPost,
-			"Access-Control-Allow-Headers": "authorization,content-type",
+			"Access-Control-Allow-Headers": "authorization,content-type,idempotency-key",
 			"Access-Control-Max-Age":       "7200",
 		}
 		if rec.Code != http.StatusNoContent {
@@ -99,7 +99,7 @@ func TestCORSReplies(t *testing.T) {
 	t.Parallel()
 	router, _, issuer := testAPIFor(t, Limits{PerIP: 1, PerUser: 1, Limiter: valkeyLimiter(t)}, []string{allowedSite})
 	token := issuer.Token(testSubject)
-	exposed := "Location, X-Request-Id, X-Ratelimit-Limit, X-Ratelimit-Remaining, X-Ratelimit-Reset, Retry-After"
+	exposed := "Location, X-Request-Id, X-Ratelimit-Limit, X-Ratelimit-Remaining, X-Ratelimit-Reset, Retry-After, Idempotent-Replayed"
 
 	tests := []struct {
 		name, token string

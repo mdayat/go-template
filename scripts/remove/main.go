@@ -30,9 +30,9 @@ func parts() map[string][]string {
 	return map[string][]string{
 		"api": {
 			"cmd/api", "internal/api", "docs/standards/http-api.md",
-			// Signing in and rate limits exist for the API's routes; nothing else checks tokens or
-			// counts requests.
-			"internal/auth", "internal/authtest", "scripts/devtoken", "internal/ratelimit",
+			// Signing in, rate limits and kept replies exist for the API's routes; nothing else checks
+			// tokens, counts requests or replays them.
+			"internal/auth", "internal/authtest", "scripts/devtoken", "internal/ratelimit", "internal/idempotency",
 			"local/grafana/dashboards/api.json",
 		},
 		// Without a worker nothing runs queued jobs, so the queue goes too: an endpoint would queue
@@ -57,6 +57,7 @@ func mentions() map[string][]string {
 			"internal/auth", "devtoken", "dev-token", "AUTH_JWKS_URL", "AUTH_ISSUER", "AUTH_AUDIENCE",
 			"TRUSTED_PROXIES", "RATE_LIMIT_PER_IP", "RATE_LIMIT_PER_USER", "internal/ratelimit", "redis_rate",
 			"otelhttp", "http.server.request.duration", "api.json", "/readyz", "SHUTDOWN_DELAY", "CORS_ALLOWED_ORIGINS",
+			"internal/idempotency", "keepReplies", "Idempotent-Replayed",
 		},
 		"worker": {
 			"cmd/worker", "internal/worker", "internal/jobs", "internal/queue", "testqueue", "worker.md",

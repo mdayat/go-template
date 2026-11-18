@@ -219,6 +219,51 @@ log shows as `client.ip`.
 To count somewhere else, give `api.Limits` another `ratelimit.Limiter` in `cmd/api/main.go`: for a
 single copy, `ratelimit.NewMemory()`. Handlers and services don't change.
 
+## Retrying a POST safely
+
+A client that gets no reply (a dropped connection, a timeout) can't tell whether its request ran.
+Retrying a GET, PUT, PATCH or DELETE is safe: twice gives the same result as once. Retrying a POST
+that creates something may create it twice. So for each action a client makes up a key (a UUID)
+and sends it on every try of that action, `Idempotency-Key: <key>`; a new action gets a new key.
+
+Every signed-in POST with the header goes through `keepReplies` (`internal/api/idempotency.go`).
+The first try with a key runs, and its reply (status, body, `Content-Type`, `Location`) is kept for
+24 hours, per user and key. A later try:
+
+| The key's request | The try gets |
+|---|---|
+| replied, to the same request (method, path with query, body byte for byte) | the kept reply, with `Idempotent-Replayed: true`; nothing runs |
+| replied, to a different request (even the same JSON spaced or ordered differently) | 422: the key was used for another request |
+| still running | 409 with `Retry-After: 1`: try again shortly |
+| replied with a 5xx (its time running out is a 503), 401 or 403, panicked, or was cut off before replying | runs again: the key was freed |
+
+A reply is kept even if its client had gone before it arrived: the work may be saved, and the
+client retrying is the case this is for. A 4xx is kept (the same request gets the same answer) but
+not a 401 or 403, as sign-in and rights can change. A reply body over 64 KB isn't kept: a retry
+gets a 409 saying the request ran, with its `Location` if it had one. A replayed 409 from the
+handler itself carries `Idempotent-Replayed`; the "still running" one carries `Retry-After`. A
+replay is a new request with the first one's reply, so its `X-Request-Id` is new while the body's
+`request_id`, if any, is the first one's. Kept replies hold whatever the reply held, personal data
+included, in Valkey for the 24 hours.
+
+On a POST a key is 1 to 255 visible ASCII characters, or the request gets a 400; an empty header is
+no key. Other methods ignore it, and without it nothing changes. A keyed body is read whole first,
+to compare retries, so it has the JSON endpoints' 1 MB limit (checked before the `Content-Type`):
+an upload endpoint takes no key. Every try counts against the rate limits, replays too.
+
+Keys are kept in Valkey (`internal/idempotency/valkey`, 7.2 or later), so Valkey must not evict
+keys to free memory (`maxmemory-policy noeviction`): an evicted key runs its request again. While
+Valkey can't be reached, a request with a key gets a 503 rather than run without the guarantee it
+asked for; one without a key is unaffected.
+
+A request holds its key for a minute while it runs; if the API dies mid-request the hold runs out
+and a retry runs again. (So can a claim whose answer Valkey lost: tries get the 409 "still running"
+for that minute.) An endpoint whose work outlives that (`handler.Detach`) needs a longer
+`idempotencyHold`. One gap remains: if the API dies after a request's work is saved but before its
+reply is kept, a retry runs it again. Where that would cost money, also save the key in the same
+database transaction as the work (a unique column on the row it creates), so the second run fails
+on the unique rule instead of saving twice.
+
 ## Web pages on other sites (CORS)
 
 A browser lets a web page read replies only from its own site (scheme, host and port), unless the
@@ -233,8 +278,9 @@ preflight (an `OPTIONS` request with `Access-Control-Request-Method`, which the 
 first, without a token) itself with a 204, before sign-in and the rate limits; only an allowed
 site's gets the headers that let the browser go on, and the browser keeps that answer up to two
 hours. Every reply to an allowed site, errors included, says the page may read it, and which
-headers besides the basic ones: `Location`, `X-Request-Id`, `X-RateLimit-*` and `Retry-After`.
-Pages may send `Authorization` and `Content-Type`, with the methods the routes use; a page that
+headers besides the basic ones: `Location`, `X-Request-Id`, `X-RateLimit-*`, `Retry-After` and
+`Idempotent-Replayed`. Pages may send `Authorization`, `Content-Type` and `Idempotency-Key`, with
+the methods the routes use; a page that
 sends another header (a browser tracing library's `traceparent`) fails its preflight until the
 header is added to `AllowedHeaders`.
 

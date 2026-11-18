@@ -45,6 +45,7 @@ jobs. Keep both, one or neither: see [Choose what you need](#choose-what-you-nee
 | `internal/api` | routes per client (`mobile/` at `/mobile/v1`, `web/` at `/web`, `admin/` at `/admin`; helpers they share in `handler/`), one JSON log line per request, [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) error replies, JSON body reading, sign-in and [rate limits](docs/standards/http-api.md#rate-limits) on every route but the health and readiness checks |
 | `internal/auth` | who signed in, as a provider proved it; `internal/auth/jwks` checks JWTs against the issuer's published keys (Firebase, Auth0, Cognito, Keycloak, Supabase; see [signing in](docs/standards/http-api.md#signing-in)) |
 | `internal/ratelimit` | counting requests for the rate limits: in Valkey (`internal/ratelimit/valkey`), shared by every copy of the API, or in memory |
+| `internal/idempotency` | the replies kept so a client can [retry a POST safely](docs/standards/http-api.md#retrying-a-post-safely), in Valkey (`internal/idempotency/valkey`) |
 | `internal/authtest`, `scripts/devtoken` | a stand-in sign-in provider: for tests, and for local runs (`make dev-token`) |
 | `docs/standards/http-api.md` | [the HTTP API's rules](docs/standards/http-api.md) |
 
@@ -66,6 +67,9 @@ jobs. Keep both, one or neither: see [Choose what you need](#choose-what-you-nee
 ### Valkey
 
 [Valkey](https://valkey.io) (an open-source Redis) holds what every copy of the programs shares.
+Use Valkey 7.2 or later, or Redis 7 or later, with `maxmemory-policy noeviction` (a managed one has
+it as a setting): evicting keys to free memory would silently lose data the programs rely on; at
+its memory limit it refuses writes instead, which shows as errors. Alert on its memory use.
 
 | Path | What |
 |---|---|

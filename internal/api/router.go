@@ -18,6 +18,7 @@ import (
 	"github.com/mdayat/go-template/internal/api/mobile"
 	"github.com/mdayat/go-template/internal/api/web"
 	"github.com/mdayat/go-template/internal/db"
+	"github.com/mdayat/go-template/internal/idempotency"
 	"github.com/mdayat/go-template/internal/queue"
 	"github.com/mdayat/go-template/internal/task"
 	"github.com/mdayat/go-template/internal/user"
@@ -37,6 +38,8 @@ type Services struct {
 	// Users turns whoever signed in into our user (see authenticate).
 	Users *user.Service
 	Tasks *task.Service
+	// Idempotency keeps replies so a client can retry a POST safely (see keepReplies).
+	Idempotency idempotency.Store
 	// remove:worker
 	// Jobs queues background jobs for the worker (cmd/worker).
 	Jobs queue.Enqueuer
@@ -48,6 +51,7 @@ type Services struct {
 // other: its tests would pass while the app served it with a nil service.
 func NewServices(
 	queries *db.Queries,
+	replies idempotency.Store,
 	// remove:worker
 	jobs queue.Enqueuer,
 	// remove:end
@@ -55,6 +59,8 @@ func NewServices(
 	return Services{
 		Users: user.NewService(queries),
 		Tasks: task.NewService(queries),
+		// Not built from queries: its store is Valkey, which cmd/api connects.
+		Idempotency: replies,
 		// remove:worker
 		Jobs: jobs,
 		// remove:end
@@ -84,6 +90,8 @@ func NewRouter(
 	// no route matches is a plain 404 that needs no sign-in, like any other.
 	signedIn := []func(http.Handler) http.Handler{
 		authenticate(authn, services.Users, signedOutLimit(limits.PerIP, limits.Limiter), signedInLimit(limits.PerUser, limits.Limiter)),
+		// After sign-in: a key is the signed-in user's.
+		keepReplies(services.Idempotency),
 	}
 	router.Route("/mobile/v1", func(r chi.Router) {
 		r.Group(func(r chi.Router) {

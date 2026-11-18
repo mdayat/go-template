@@ -33,12 +33,13 @@ func allowOrigins(origins []string) func(http.Handler) http.Handler {
 		},
 		// A header a page sends that isn't here fails its preflight: add it (a browser tracing
 		// library's traceparent, say).
-		AllowedHeaders: []string{"Authorization", "Content-Type"},
+		AllowedHeaders: []string{"Authorization", "Content-Type", idempotencyHeader},
 		// What a page may read besides the basic headers: where a created row is, the request's ID
-		// for a support ticket, and the rate limits, to wait before trying again.
+		// for a support ticket, the rate limits, to wait before trying again, and whether a reply
+		// is a retry's.
 		ExposedHeaders: []string{
 			"Location", "X-Request-Id", "X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Reset",
-			"Retry-After",
+			"Retry-After", replayedHeader,
 		},
 		MaxAge:               corsMaxAge,
 		OptionsSuccessStatus: http.StatusNoContent,

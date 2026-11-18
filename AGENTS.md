@@ -98,6 +98,9 @@ outside `cmd/`.
   provider's ID into our user (`internal/user`, the `users` table; `is_admin` is ours). Handlers
   never read tokens or a provider's claims; tables point at `users.id`. A provider is an
   `Authenticator` implementation picked in `cmd/api`. Endpoint tests are signed in by `testAPI`.
+- A POST with an `Idempotency-Key` runs once per user and key (`keepReplies`); its retries get the
+  kept reply. Nothing to add per endpoint, but a POST that works past a minute (`handler.Detach`)
+  outlives its key's hold: see [retrying a POST](docs/standards/http-api.md#retrying-a-post-safely).
 - Handlers pass `handler.CurrentUser(r)` to services, which decide who may do what: a user's own
   rows only (someone else's is `NotFound`, never `Forbidden`), an admin's everyone's. `Forbidden`
   (403) is for actions that are no secret, like an admin-only route (under `/admin`, behind

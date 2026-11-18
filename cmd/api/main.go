@@ -21,6 +21,7 @@ import (
 	"github.com/mdayat/go-template/internal/config"
 	"github.com/mdayat/go-template/internal/db"
 	"github.com/mdayat/go-template/internal/httpclient"
+	idempotencyvalkey "github.com/mdayat/go-template/internal/idempotency/valkey"
 	"github.com/mdayat/go-template/internal/queue/valkey"
 	ratelimitvalkey "github.com/mdayat/go-template/internal/ratelimit/valkey"
 	"github.com/mdayat/go-template/internal/startup"
@@ -39,6 +40,11 @@ const authKeysTimeout = 5 * time.Second
 // on its own instead: the longest a slow or hung Valkey holds up a request, since after a failure
 // the copy stops calling it for a while.
 const rateLimitTimeout = 250 * time.Millisecond
+
+// idempotencyTimeout is how long one Valkey call for an Idempotency-Key may take. Past it, claiming
+// the key fails with a 503 (there's no running unguarded instead); keeping or freeing it fails onto
+// the log line, as the reply has gone out.
+const idempotencyTimeout = 500 * time.Millisecond
 
 // buildVersion is set at build time with -ldflags "-X main.buildVersion=...", for builds that can't
 // see .git (the Docker build).
@@ -103,6 +109,14 @@ func run() error {
 	defer limitsClient.Close()
 	cfg.limits.Limiter = ratelimitvalkey.New(limitsClient, "api:", rateLimitTimeout, log.Logger)
 
+	// Not connected here either: only requests carrying an Idempotency-Key need it, and get a 503
+	// while it's down.
+	repliesClient, err := startup.RedisFailFast(cfg.redisURL, idempotencyTimeout, "idempotency", providers.Meters, providers.Tracers)
+	if err != nil {
+		return err
+	}
+	defer repliesClient.Close()
+
 	// remove:worker
 	redisClient, err := startup.ConnectRedis(ctx, cfg.redisURL, "queue", providers.Meters, providers.Tracers)
 	if err != nil {
@@ -113,6 +127,7 @@ func run() error {
 	// remove:end
 	services := api.NewServices(
 		db.New(pool),
+		idempotencyvalkey.New(repliesClient, "api:", idempotencyTimeout),
 		// remove:worker
 		valkey.NewEnqueuer(redisClient, providers.Tracers),
 		// remove:end

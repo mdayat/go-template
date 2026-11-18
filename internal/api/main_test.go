@@ -20,6 +20,7 @@ import (
 	"github.com/mdayat/go-template/internal/authtest"
 	"github.com/mdayat/go-template/internal/db"
 	"github.com/mdayat/go-template/internal/httpclient"
+	idempotencyvalkey "github.com/mdayat/go-template/internal/idempotency/valkey"
 	"github.com/mdayat/go-template/internal/queue/valkey"
 	"github.com/mdayat/go-template/internal/testdb"
 	"github.com/mdayat/go-template/internal/testredis"
@@ -55,6 +56,7 @@ func testAPIFor(t *testing.T, limits Limits, allowedOrigins []string) (http.Hand
 	pool := testdb.New(t)
 	services := NewServices(
 		db.New(pool),
+		testReplies(t),
 		// remove:worker
 		valkey.NewEnqueuer(testredis.New(t), tracenoop.NewTracerProvider()), // the test job queue
 		// remove:end
@@ -162,4 +164,11 @@ func readProblem(t *testing.T, rec *httptest.ResponseRecorder) problemReply {
 // cursorOf encodes raw the way real cursors are encoded, so only its content is wrong.
 func cursorOf(raw string) string {
 	return base64.RawURLEncoding.EncodeToString([]byte(raw))
+}
+
+// testReplies keeps the test's idempotency keys in the test Valkey. Keys are per user, and every
+// test's users are new, so tests don't share them.
+func testReplies(t *testing.T) *idempotencyvalkey.Store {
+	t.Helper()
+	return idempotencyvalkey.New(testredis.New(t), "test:", time.Second)
 }
