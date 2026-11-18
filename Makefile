@@ -27,7 +27,7 @@ export DATABASE_URL ?= $(shell sed -nE 's/^(export[[:space:]]+)?DATABASE_URL=//p
 
 .PHONY: fmt lint test test-db-clean vuln build rename image image-migrate image-oneoff scan db-up \
 	db-down telemetry-up telemetry-down generate check-generated check-versions migrate-diff \
-	migrate-apply
+	migrate-apply migrate-check migrate-hash
 
 fmt:
 	$(TOOL) golangci-lint fmt ./...
@@ -186,3 +186,15 @@ migrate-diff:
 migrate-apply:
 	@test -n "$$DATABASE_URL" || { echo "DATABASE_URL is not set (in the environment or .env)"; exit 1; }
 	atlas migrate apply --env local
+
+# Fails if a migration new since commit base could break the app still running while it's
+# applied, or if one base has was edited, deleted or renamed (docs/standards/database.md). base
+# defaults to where this branch left origin/main: its tip would count migrations merged there
+# since as deleted here. CI compares with the commit before the push, or a pull request's base.
+migrate-check:
+	go run ./scripts/migratecheck "$(or $(base),$(shell git merge-base origin/main HEAD 2>/dev/null),origin/main)"
+
+# Update atlas.sum after editing a migration by hand (an allow-risky line, CONCURRENTLY): Atlas
+# refuses a file whose checksum differs.
+migrate-hash:
+	atlas migrate hash --env local

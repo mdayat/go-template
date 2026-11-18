@@ -12,7 +12,7 @@ The worker (`cmd/worker`, `internal/worker`) runs jobs queued with asynq on Valk
 
 ## Before you finish
 
-Run `make fmt lint test check-generated`. All four must pass; don't silence a linter with
+Run `make fmt lint test check-generated migrate-check`. All five must pass; don't silence a linter with
 `//nolint` unless the line is truly a false positive, and then name the linter and the reason.
 `make test` starts the compose services in Docker; tests read `TEST_DATABASE_URL` from the
 environment or `.env` (see `.example.env`).

@@ -21,6 +21,8 @@ turned into typed Go by [sqlc](https://sqlc.dev); migrations are written by
    what runs on production.
 3. `make generate` updates `internal/db`; `make migrate-apply` applies the migration locally.
 4. `make check-generated` (CI runs it) fails if any of these is out of date.
+5. `make migrate-check` (CI runs it) fails if the new migration could break the app still running
+   during the deploy ([below](#migrations-that-are-safe-while-the-old-app-runs)).
 
 Never edit a migration that's been merged: it may already have run somewhere. `atlas.sum` makes
 Atlas refuse an edited file. Fix a mistake with a new migration. There are no "down" migrations;
@@ -30,23 +32,70 @@ undoing a change is a new migration too.
 
 During a deploy, the old app keeps serving requests against the new schema for a while. So each
 migration must work with the code before it **and** after it. Atlas Community doesn't check this
-(its migration linter is paid), so review does:
+(its migration linter is paid), so `make migrate-check` checks the common mistakes, and review the
+rest:
 
 - A new `NOT NULL` column needs a `DEFAULT`, or the old app's inserts fail.
 - Don't rename or drop a column the running app uses. Do it in steps over separate deploys: add the
   new column, deploy code that writes both and reads the new one, copy the old data, then drop the
   old column.
 - An index on a big table: `CREATE INDEX CONCURRENTLY`, so writes don't wait for it. It can't run
-  inside a transaction, so its migration file starts with `-- atlas:txmode none` and holds only that
-  statement.
+  inside a transaction, so its migration file starts with `-- atlas:txmode none` and an empty line,
+  and holds only that statement (review checks that).
 - A new foreign key or `CHECK` on a big table: add it `NOT VALID`, then `VALIDATE CONSTRAINT` in a
   later migration, so the table isn't locked while every row is checked.
 - A new column the new code fills (an owner, say) is empty on every row the old app writes during
   the deploy, and only the old app knew what belonged there. If those rows matter, first deploy
   code that writes the value into a column added earlier, then the code that relies on it.
+- Backfill rows with a one-off command ([commands.md](commands.md)), in batches, not with `UPDATE`
+  in a migration, which keeps every row it changes locked until the migration ends.
 
 The template's own migrations build indexes and add keys the plain way: its table is small. Don't
 copy that to a big table; follow the steps above.
+
+`make migrate-check` reads each migration that commit `base` doesn't have (by default, where your
+branch left `origin/main`; `base=HEAD` checks the ones not committed yet).
+CI compares with the commit before the push, or a pull request's base. It reads SQL by its keywords,
+so it catches the common forms, not every one. It fails on:
+
+- dropping a table, column, view, function, procedure, type, domain, schema or sequence, `TRUNCATE`,
+  and any `RENAME`;
+- a new `NOT NULL` column without a `DEFAULT`, `SET NOT NULL`, `DROP DEFAULT`, and a column type
+  change;
+- a new column Postgres fills row by row, rewriting the table while it's locked: `serial`,
+  `GENERATED`, or a `DEFAULT` that differs on each row (`gen_random_uuid()`, `random()`; `now()` is
+  fine);
+- an index built without `CONCURRENTLY` (`UNIQUE`, `PRIMARY KEY` and `EXCLUDE` constraints build
+  one too), a foreign key or `CHECK` added without `NOT VALID`, and one written on a new column
+  (`REFERENCES`, `CHECK`), which can't be `NOT VALID`;
+- `CONCURRENTLY` (an index built or dropped, a `REINDEX`) in a file that doesn't start with
+  `-- atlas:txmode none` and an empty line (Atlas reads the line only from the comments a file
+  starts with, ended by an empty line, and not with Windows line endings; without it the file runs
+  in a transaction, and fails on deploy);
+- changing rows: `UPDATE`, `DELETE`, `MERGE`, including inside `WITH` (an insert's
+  `ON CONFLICT DO UPDATE` passes: seeding rows is fine);
+- what locks or rewrites a whole table: `SET EXPRESSION`, `SET LOGGED`/`UNLOGGED`, `LOCK`,
+  `REINDEX` without `CONCURRENTLY`, `VACUUM FULL`, `CLUSTER`;
+- a `DO` block, whose code it can't read;
+- a migration `base` has that was edited, deleted or renamed since (deleting all of them, to start
+  a new project's history afresh, is fine).
+
+Tables created in the new migrations, and in no earlier one, are skipped: nothing uses them yet.
+Dropping an index or a constraint isn't checked (Atlas drops and rebuilds them for every change to
+one): review whether the old app relies on it, such as a unique rule it matches by name. A type
+change that only widens a column (a longer `varchar`, `varchar` to `text`) doesn't rewrite the
+table: allow it.
+
+To keep one on purpose (a small table, a column nothing reads any more), put a line with the reason
+right above the statement, then run `make migrate-hash` (Atlas refuses a file edited after
+`atlas.sum` was written; do the same after adding `CONCURRENTLY` by hand). The line lets the whole
+statement through, and Atlas writes every change to a table as one `ALTER TABLE`: the check lists
+all it let through, so read the list, and split the statement if a part needs fixing instead.
+
+```sql
+-- allow-risky: tasks holds a few hundred rows; the index builds at once
+CREATE INDEX "tasks_due_idx" ON "tasks" ("due");
+```
 
 ## Queries
 

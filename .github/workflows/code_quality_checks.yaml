@@ -82,6 +82,15 @@ jobs:
       - name: Check generated files are up to date
         run: make check-generated
 
+      # Only migrations new since the commit before the push, or a pull request's base, are checked:
+      # that commit is fetched to compare with (none on a repository's first push).
+      - name: Check new migrations are safe while the old app runs
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [ -n "${BASE//0/}" ]; then git fetch --no-tags --depth=1 origin "$BASE"; fi
+          make migrate-check base="$BASE"
+
       - name: Lint
         run: make lint
 

@@ -29,11 +29,12 @@ jobs. Keep both, one or neither: see [Choose what you need](#choose-what-you-nee
 | `internal/testdb` | a fresh, migrated Postgres database per test |
 | `internal/config` | reads settings from the environment and `.env` (or a secret manager you add), all problems reported at once; each program lists its own in `cmd/<name>/settings.go` |
 | `db/` | `schema.sql` (edit this), migrations written by [Atlas](https://atlasgo.io), queries |
+| `scripts/migratecheck` | fails on a new migration that could break the app still running during a deploy (`make migrate-check`) |
 | `docs/standards/` | the rules, with reasons: [where code goes](docs/standards/structure.md), [code style](docs/standards/code-style.md), [errors](docs/standards/errors.md), [logging](docs/standards/logging.md), [metrics](docs/standards/metrics.md), [traces](docs/standards/tracing.md), [testing](docs/standards/testing.md), [database](docs/standards/database.md), [outside services](docs/standards/outside-calls.md) |
 | `AGENTS.md` | the same rules in short, for AI coding tools (`CLAUDE.md` loads it) |
 | `tools/go.mod` | pinned versions of golangci-lint, sqlc and govulncheck, kept out of the app's `go.mod` |
 | `Dockerfile` | each program's image, and a `migrate` image that applies migrations |
-| `.github/workflows` | CI: generated files up to date, versions agree, lint, vulnerabilities, tests, images build |
+| `.github/workflows` | CI: generated files up to date, versions agree, new migrations safe, lint, vulnerabilities, tests, images build |
 | `.github/dependabot.yml` | pull requests for newer dependencies, when you ask (and once a quarter) |
 
 <!-- remove:api -->
@@ -139,6 +140,8 @@ its memory limit it refuses writes instead, which shows as errors. Alert on its 
 | `make generate` | regenerate `internal/db` from `db/queries` |
 | `make migrate-apply` | apply migrations to `DATABASE_URL` |
 | `make check-generated` | fail if generated code, `atlas.sum` or migrations are out of date |
+| `make migrate-check` | fail if a migration new since `origin/main` could break the app still running during the deploy (`base=<commit>` compares with another) |
+| `make migrate-hash` | update `atlas.sum` after editing a migration by hand |
 | `make check-versions` | fail if Go's or Atlas's version differs between the places it's pinned |
 | `make vuln` | known vulnerabilities in dependencies |
 | `make image` | build each program's image and the migrate image |
@@ -154,7 +157,7 @@ its memory limit it refuses writes instead, which shows as errors. Alert on its 
 - `make run-worker`: run the worker.
 <!-- remove:end -->
 
-Before you push: `make fmt lint test check-generated`. The database workflow is in
+Before you push: `make fmt lint test check-generated migrate-check`. The database workflow is in
 [docs/standards/database.md](docs/standards/database.md).
 
 ### Keeping dependencies up to date
@@ -223,7 +226,7 @@ tests), then remove tasks, in one go with your first table:
    ```sh
    make migrate-diff name=init   # a fresh first migration for your schema
    make generate
-   make fmt lint test check-generated
+   make fmt lint test check-generated migrate-check
    ```
 
    `make lint` then reports any unexported shared helper no feature uses any more as `unused`:
@@ -246,7 +249,9 @@ Each removal deletes the part's folders and the lines marked for it in shared fi
 formats, tidies `go.mod`, builds, and checks that no file still mentions the part. Your own `.env`
 is never edited (git ignores it): delete the removed part's settings from it by hand. Tables stay,
 as their migrations are history: without the worker the `outbox` table is unused; drop it with a
-migration of your own (`make migrate-diff`) once the change is deployed. CI then checks only the
+migration of your own (`make migrate-diff`, with an `-- allow-risky:` line, as
+[database.md](docs/standards/database.md#migrations-that-are-safe-while-the-old-app-runs) says)
+once the change is deployed. CI then checks only the
 shape you chose.
 
 <!-- remove:end -->
