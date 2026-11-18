@@ -130,14 +130,16 @@ func NewProblem(status int, detail string) Problem {
 // WriteProblem writes p as the reply, with the request's ID.
 func WriteProblem(w http.ResponseWriter, r *http.Request, p Problem) {
 	// Drop headers describing a reply body. A handler may set them and then fail; left on the problem
-	// reply they'd misdescribe it (a gzip Content-Encoding on plain JSON breaks the client, a
-	// success's Cache-Control lets a proxy cache the error). Middleware headers like X-Request-Id stay.
+	// reply they'd misdescribe it (a gzip Content-Encoding on plain JSON breaks the client). Middleware
+	// headers like X-Request-Id stay.
 	for _, h := range [...]string{
-		"Cache-Control", "Content-Disposition", "Content-Encoding", "Content-Language", "Content-Length",
+		"Content-Disposition", "Content-Encoding", "Content-Language", "Content-Length",
 		"Content-Range", "ETag", "Expires", "Last-Modified",
 	} {
 		w.Header().Del(h)
 	}
+	// An error is never cached, even where the handler allowed caching its success.
+	w.Header().Set("Cache-Control", "no-store")
 	if id, ok := hlog.IDFromRequest(r); ok {
 		p.RequestID = id.String()
 	}

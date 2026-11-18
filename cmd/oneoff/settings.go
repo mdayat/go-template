@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"time"
 
 	"github.com/mdayat/go-template/internal/config"
@@ -24,11 +25,13 @@ func loadSettings(sources ...config.Source) (settings, error) {
 		// A batch is a few hundred rows: a statement or an idle transaction this long is a stuck
 		// one, holding its locks while the apps run.
 		dbLimits: startup.DBLimits{
+			// A run works one batch at a time, each on one connection.
+			MaxConns:          r.Count("DB_MAX_CONNS", 2),
 			Statement:         r.Duration("DB_STATEMENT_TIMEOUT", time.Minute),
 			IdleInTransaction: r.Duration("DB_IDLE_IN_TRANSACTION_TIMEOUT", time.Minute),
 		},
 	}
-	if err := r.Err(); err != nil {
+	if err := errors.Join(r.Err(), startup.CheckMaxConns(s.dbLimits.MaxConns)); err != nil {
 		return settings{}, err
 	}
 	return s, nil

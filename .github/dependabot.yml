@@ -22,11 +22,13 @@ updates:
         patterns: ["*"]
 
   # Base images in the Dockerfile. A newer golang image is how a new Go release shows up: its pull
-  # request fails make check-versions until go.mod and tools/go.mod name the same version.
+  # request fails make check-versions until go.mod and tools/go.mod name the same version. Weekly:
+  # they're pinned by digest, so a base image's security fix arrives only through these (Atlas's,
+  # ignored below, only when Atlas is updated by hand).
   - package-ecosystem: docker
     directory: /
     schedule:
-      interval: quarterly
+      interval: weekly
     groups:
       docker-images:
         patterns: ["*"]

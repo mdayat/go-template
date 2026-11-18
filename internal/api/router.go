@@ -62,8 +62,8 @@ func NewServices(
 }
 
 // NewRouter returns the API's routes, each request logged to logger, measured to meters and traced
-// to tracers. Every route but the health check needs someone signed in, as authn says, and is rate
-// limited as limits says.
+// to tracers. Every route but the health and readiness checks needs someone signed in, as authn
+// says, and is rate limited as limits says. /readyz answers as ready says.
 //
 // Each client has its routes under its own prefix, in its own package, so one client's replies can
 // change without touching another's (docs/standards/http-api.md): /mobile/v1 (internal/api/mobile:
@@ -71,9 +71,10 @@ func NewServices(
 // app) and /admin (internal/api/admin: admins only). All of them call the same services.
 func NewRouter(
 	logger zerolog.Logger, meters metric.MeterProvider, tracers trace.TracerProvider,
-	services Services, authn Authenticator, limits Limits,
+	services Services, ready *Readiness, authn Authenticator, limits Limits,
 ) *chi.Mux {
 	router := newBaseRouter(logger, meters, tracers, limits.TrustedProxies)
+	router.Get(readyPath, ready.serve)
 	// One decoder for every client: the validator caches what it learns about each type.
 	decoder := handler.NewDecoder()
 	// The same check and counts for every client (one per-user limit across them all). In an inline
@@ -123,6 +124,7 @@ func newBaseRouter(
 		clientIP(trustedProxies, logger),
 		// A fresh ID per request, never one sent by the client, which could be forged.
 		hlog.RequestIDHandler("request_id", "X-Request-Id"),
+		noStore,
 		logRequests,
 		// After logRequests: its own context has no deadline, so a timed-out request is logged as
 		// the 503 it got, not as a client that hung up (499).
@@ -130,13 +132,23 @@ func newBaseRouter(
 		// HTTP requires HEAD wherever GET works; uptime checkers and load balancers use it.
 		middleware.GetHead,
 	)
-	// Load balancers and the deploy platform decide from this route whether the app is up.
+	// The platform restarts the process if this doesn't answer (load balancers use /readyz).
 	router.Get(healthPath, func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
 	router.NotFound(handler.NotFound)
 	router.MethodNotAllowed(handler.MethodNotAllowed(router))
 	return router
+}
+
+// noStore marks every reply as not to be kept by a cache: a proxy or CDN between the app and the
+// API could otherwise keep one user's reply and hand it to another. A handler whose reply may be
+// cached sets its own Cache-Control.
+func noStore(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		next.ServeHTTP(w, r)
+	})
 }
 
 // limitRequestTime cancels each request's context after d, which stops its queries.

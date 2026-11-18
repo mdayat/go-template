@@ -32,6 +32,28 @@ queues it every day at midnight UTC.
 Everything that queues or runs a job builds and reads it only through `internal/jobs`, so they
 can't disagree on a type name or a field.
 
+## Queues
+
+Every job goes to `jobs.Queue` ("default") unless it needs a queue of its own. Each queue has its
+own number of jobs a worker instance (one running copy of the worker) runs at once, so jobs that
+fill one queue's slots can't hold up another's. A job gets its own queue when it mustn't wait
+behind others (urgent work, like a sign-in email) or would hold others up (slow work, like calling
+an AI model): add a constant like `jobs.Queue` and a line in `jobs.Queues()` with its number, and
+set the job's `Queue` to it. A job sent to a queue `jobs.Queues()` doesn't list is never run, so
+add every job's builder to `TestQueues` (`internal/jobs/jobs_test.go`), which checks its queue.
+
+`WORKER_QUEUES` overrides the numbers per instance, `default=7,slow=3`, and an instance takes only
+the queues it lists. So slow jobs can run on instances of their own (`WORKER_QUEUES=slow=3`) while
+others take the rest. A queue no instance takes never runs its jobs: those queued to run now show
+as a growing wait ([metrics.md](metrics.md#what-to-alert-on)), but those waiting for a retry or
+a later time stay `retrying` or scheduled, as only an instance taking the queue moves them on.
+The worker opens as many database connections as it runs jobs at once
+([database.md](database.md#connections)).
+
+Removing a queue takes two deploys. Jobs already in it stay there, and once it's gone from
+`jobs.Queues()` no instance takes them. First send its jobs to another queue, keeping the old one
+listed; once its `job.queue.jobs` shows none waiting, retrying or running, delete its line.
+
 ## Every job can run twice
 
 asynq runs a job **at least once**, not exactly once. A job runs again when:
@@ -122,8 +144,10 @@ contexts cancelled, which stops their queries. They run again on the next worker
 A failed run carries `error.message` (and `error.stack_trace` for a panic) on the same line. Inside
 a handler, `zerolog.Ctx(ctx)` is the job's logger: lines logged through it carry `job_type` and
 `job_id`, and `trace.id` and `span.id` when the run's trace is kept: the run is a span, in the trace
-of the request that queued it ([tracing.md](tracing.md)). Log on a line of your own only what's
-worth finding later (`"deleted rows purged"` with each table's count), never the payload.
+of the request that queued it ([tracing.md](tracing.md)). A job queued during a request also
+carries `request_id`, that request's ID, even when its trace isn't kept. Log on a line of your own
+only what's worth finding later (`"deleted rows purged"` with each table's count), never the
+payload.
 
 asynq also logs its own events (starting, shutting down, "Retry exhausted for task", a job put
 back in the queue), marked `"source":"asynq"`. Alert on the `job completed` lines, not on those.
@@ -210,4 +234,5 @@ make run-worker   # the worker
 ```
 
 Deploy the worker image (`make image` builds `<name>-worker`) with the settings
-`cmd/worker/settings.go` reads. It serves no port; run as many copies as the queue needs.
+`cmd/worker/settings.go` reads. It serves no port; run as many instances as the queues need: a
+wait that keeps growing ([metrics.md](metrics.md#what-to-alert-on)) means too few.

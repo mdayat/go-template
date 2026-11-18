@@ -80,6 +80,9 @@ type Run struct {
 	Queue       string
 	Attempt     int // 1 on the first run
 	MaxAttempts int // 1 + the job's MaxRetries
+	// RequestID is the ID of the API request that queued the job, for following a request into its
+	// jobs in the logs; "" for a job queued anywhere else (a schedule, another job).
+	RequestID string
 
 	// WillRetry reports whether the run, ending with err, will be tried again. Each queue decides
 	// in its own way (asynq retries a run past its time limit by its count alone, whatever err is),

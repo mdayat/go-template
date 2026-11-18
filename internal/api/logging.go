@@ -23,9 +23,9 @@ import (
 const statusClientClosed = 499
 
 // logRequests writes one summary line per request: error level for 5xx replies and panics, info for
-// the rest. Successful health checks aren't logged. The query string, headers and bodies are never
-// logged: they can hold tokens and personal data. A handler's returned error (see Handle) or panic
-// is attached to this line, so each request is logged exactly once.
+// the rest. Successful health checks and readiness checks aren't logged. The query string, headers
+// and bodies are never logged: they can hold tokens and personal data. A handler's returned error
+// (see Handle) or panic is attached to this line, so each request is logged exactly once.
 func logRequests(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
@@ -42,7 +42,9 @@ func logRequests(next http.Handler) http.Handler {
 				status = statusClientClosed
 			}
 		}
-		if r.URL.Path == healthPath && status < http.StatusBadRequest {
+		// Probes come every few seconds; a line each would bury the rest. /readyz logs its own
+		// changes (Readiness.serve), and a panic in it is still logged.
+		if (r.URL.Path == healthPath && status < http.StatusBadRequest) || (r.URL.Path == readyPath && !rec.panicked) {
 			return
 		}
 

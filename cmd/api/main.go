@@ -127,9 +127,10 @@ func run() error {
 	// requests: a long endpoint's handler.Detach context ends with it too.
 	base, giveUp := context.WithCancel(context.Background())
 	defer giveUp()
+	ready := api.NewReadiness(startup.DBReady(pool), log.Logger)
 	server := &http.Server{
 		BaseContext:       func(net.Listener) context.Context { return handler.WithShutdown(base, base) },
-		Handler:           api.NewRouter(log.Logger, providers.Meters, providers.Tracers, services, authn, cfg.limits),
+		Handler:           api.NewRouter(log.Logger, providers.Meters, providers.Tracers, services, ready, authn, cfg.limits),
 		ErrorLog:          api.ServerErrorLog(log.Logger),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
@@ -157,6 +158,17 @@ func run() error {
 	// Release the signal handler so a second Ctrl-C kills a stuck shutdown right away.
 	stop()
 
+	// A load balancer sends requests until it sees /readyz fail, a few seconds after this: until
+	// then, keep serving them, or they're refused.
+	ready.Drain()
+	if cfg.shutdownDelay > 0 {
+		log.Info().Str("delay", cfg.shutdownDelay.String()).Msg("not ready, serving until the delay ends")
+		select {
+		case <-time.After(cfg.shutdownDelay):
+		case err := <-serveErr:
+			return fmt.Errorf("serve http: %w", err)
+		}
+	}
 	log.Info().Msg("shutting down")
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()

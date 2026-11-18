@@ -87,7 +87,7 @@ func TestServerRunsOneScheduledCopy(t *testing.T) {
 		return nil
 	})
 	mux.Handle("test:by-hand", func(context.Context, []byte) error { runs.Add(10); return nil })
-	server, err := NewServer(client, mux, ServerOptions{Queues: []string{queueName}, ShutdownTimeout: time.Second, Logger: zerolog.Nop()})
+	server, err := NewServer(client, mux, ServerOptions{Queues: []queue.Limit{{Queue: queueName, Concurrency: 10}}, ShutdownTimeout: time.Second, Logger: zerolog.Nop()})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -94,10 +94,10 @@ outside `cmd/`.
   kebab-case nouns; JSON keys and query parameters snake_case.
 - `validate` tags check shape; the service checks meaning.
 - Lists: an object with a list field, cursor paging, never `null` for an empty list.
-- Every route but `/healthz` is behind `authenticate` (sign-in), which turns the provider's ID into
-  our user (`internal/user`, the `users` table; `is_admin` is ours). Handlers never read tokens or a
-  provider's claims; tables point at `users.id`. A provider is an `Authenticator` implementation
-  picked in `cmd/api`. Endpoint tests are signed in by `testAPI`.
+- Every route but `/healthz` and `/readyz` is behind `authenticate` (sign-in), which turns the
+  provider's ID into our user (`internal/user`, the `users` table; `is_admin` is ours). Handlers
+  never read tokens or a provider's claims; tables point at `users.id`. A provider is an
+  `Authenticator` implementation picked in `cmd/api`. Endpoint tests are signed in by `testAPI`.
 - Handlers pass `handler.CurrentUser(r)` to services, which decide who may do what: a user's own
   rows only (someone else's is `NotFound`, never `Forbidden`), an admin's everyone's. `Forbidden`
   (403) is for actions that are no secret, like an admin-only route (under `/admin`, behind

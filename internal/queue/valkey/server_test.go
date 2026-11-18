@@ -4,12 +4,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"slices"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/hibiken/asynq"
 	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/hlog"
 	tracenoop "go.opentelemetry.io/otel/trace/noop"
 
 	"github.com/mdayat/go-template/internal/queue"
@@ -57,7 +62,7 @@ func startJob(t *testing.T, handler queue.Handler, maxRetries int, timeout time.
 		}
 	})
 	mux.Handle("test:job", handler)
-	server, err := NewServer(client, mux, ServerOptions{Queues: []string{queueName}, ShutdownTimeout: time.Second, Logger: zerolog.Nop()})
+	server, err := NewServer(client, mux, ServerOptions{Queues: []queue.Limit{{Queue: queueName, Concurrency: 10}}, ShutdownTimeout: time.Second, Logger: zerolog.Nop()})
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)
 	}
@@ -195,14 +200,18 @@ func TestServerRunCutOffByShutdownIsRetried(t *testing.T) {
 func TestNewServerRefusesOptionsAsynqWouldReplace(t *testing.T) {
 	t.Parallel()
 	client := testredis.New(t)
-	valid := ServerOptions{Queues: []string{"default"}, ShutdownTimeout: time.Second}
+	valid := ServerOptions{Queues: []queue.Limit{{Queue: "default", Concurrency: 2}, {Queue: "slow", Concurrency: 1}}, ShutdownTimeout: time.Second}
 
 	tests := []struct {
 		name   string
 		change func(*ServerOptions)
 	}{
 		{"no queues", func(o *ServerOptions) { o.Queues = nil }},
-		{"blank queue name", func(o *ServerOptions) { o.Queues = []string{" "} }},
+		{"blank queue name", func(o *ServerOptions) { o.Queues = []queue.Limit{{Queue: " ", Concurrency: 1}} }},
+		{"no limit", func(o *ServerOptions) { o.Queues = []queue.Limit{{Queue: "default"}} }},
+		{"a queue twice", func(o *ServerOptions) {
+			o.Queues = []queue.Limit{{Queue: "default", Concurrency: 1}, {Queue: "default", Concurrency: 2}}
+		}},
 		{"no shutdown time", func(o *ServerOptions) { o.ShutdownTimeout = 0 }},
 	}
 	for _, tt := range tests {
@@ -214,5 +223,135 @@ func TestNewServerRefusesOptionsAsynqWouldReplace(t *testing.T) {
 	}
 	if _, err := NewServer(client, queue.NewMux(), valid); err != nil {
 		t.Errorf("NewServer(%+v) error = %v, want nil", valid, err)
+	}
+}
+
+// Each queue runs at most its own number of jobs at once, and a queue whose slots are all taken
+// doesn't hold up another's jobs.
+func TestServerQueuesHaveTheirOwnLimits(t *testing.T) {
+	t.Parallel()
+	client := testredis.New(t)
+	slow, fast := testqueue.NewQueue(t, client), testqueue.NewQueue(t, client)
+	release := make(chan struct{})
+	var running, most atomic.Int32
+	fastRan := make(chan struct{}, 1)
+
+	mux := queue.NewMux()
+	mux.Handle("test:slow", func(ctx context.Context, _ []byte) error {
+		n := running.Add(1)
+		defer running.Add(-1)
+		for {
+			m := most.Load()
+			if n <= m || most.CompareAndSwap(m, n) {
+				break
+			}
+		}
+		select {
+		case <-release:
+		case <-ctx.Done():
+		}
+		return nil
+	})
+	mux.Handle("test:fast", func(context.Context, []byte) error {
+		fastRan <- struct{}{}
+		return nil
+	})
+	server, err := NewServer(client, mux, ServerOptions{
+		Queues:          []queue.Limit{{Queue: slow, Concurrency: 2}, {Queue: fast, Concurrency: 1}},
+		ShutdownTimeout: time.Second, Logger: zerolog.Nop(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := server.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(server.Shutdown)
+	t.Cleanup(func() { close(release) }) // before Shutdown: cleanups run last first
+
+	enqueuer := NewEnqueuer(client, tracenoop.NewTracerProvider())
+	for range 4 {
+		if _, err := enqueuer.Enqueue(t.Context(), queue.Job{Type: "test:slow", Queue: slow, Timeout: time.Minute}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	waitFor(t, func() bool { return running.Load() == 2 }, "two slow jobs running")
+	if _, err := enqueuer.Enqueue(t.Context(), queue.Job{Type: "test:fast", Queue: fast, Timeout: time.Minute}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-fastRan:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the fast queue's job didn't run while the slow queue's slots were all taken")
+	}
+	if got := most.Load(); got != 2 {
+		t.Errorf("slow jobs running at once = %d, want the queue's limit, 2", got)
+	}
+}
+
+// waitFor polls cond until it's true, failing the test after 10 s.
+func waitFor(t *testing.T, cond func() bool, what string) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// A job queued while the API handles a request carries the request's ID into its run, for the
+// job's log lines; one queued anywhere else carries none.
+func TestServerRunCarriesTheRequestID(t *testing.T) {
+	t.Parallel()
+	client := testredis.New(t)
+	queueName := testqueue.NewQueue(t, client)
+	got := make(chan string, 2)
+	mux := queue.NewMux()
+	mux.Handle("test:job", func(ctx context.Context, _ []byte) error {
+		run, _ := queue.RunFrom(ctx)
+		got <- run.RequestID
+		return nil
+	})
+	server, err := NewServer(client, mux, ServerOptions{
+		Queues: []queue.Limit{{Queue: queueName, Concurrency: 1}}, ShutdownTimeout: time.Second, Logger: zerolog.Nop(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := server.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(server.Shutdown)
+
+	// A request's context as the API's request log leaves it.
+	var requestCtx context.Context
+	var requestID string
+	hlog.RequestIDHandler("request_id", "X-Request-Id")(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		requestCtx = r.Context()
+		id, _ := hlog.IDFromRequest(r)
+		requestID = id.String()
+	})).ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil))
+
+	enqueuer := NewEnqueuer(client, tracenoop.NewTracerProvider())
+	job := queue.Job{Type: "test:job", Queue: queueName, Timeout: time.Minute}
+	for _, ctx := range []context.Context{requestCtx, t.Context()} {
+		if _, err := enqueuer.Enqueue(ctx, job); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var ids []string
+	for range 2 {
+		select {
+		case id := <-got:
+			ids = append(ids, id)
+		case <-time.After(15 * time.Second):
+			t.Fatal("a job didn't run 15 s after queueing it")
+		}
+	}
+	slices.Sort(ids)
+	if want := []string{"", requestID}; !cmp.Equal(ids, want) {
+		t.Errorf("runs' request IDs = %q, want %q", ids, want)
 	}
 }

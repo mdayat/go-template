@@ -320,10 +320,13 @@ func TestErrorReplyDropsBodyHeaders(t *testing.T) {
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/export", nil))
 
-	for _, h := range []string{"Content-Encoding", "Content-Disposition", "Cache-Control", "ETag"} {
+	for _, h := range []string{"Content-Encoding", "Content-Disposition", "ETag"} {
 		if got := rec.Header().Get(h); got != "" {
 			t.Errorf("problem reply has %s: %q, want it dropped", h, got)
 		}
+	}
+	if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+		t.Errorf("problem reply has Cache-Control: %q, want no-store", got)
 	}
 	if rec.Header().Get("X-Request-Id") == "" {
 		t.Error("problem reply lost X-Request-Id, a middleware header")

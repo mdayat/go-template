@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"net/netip"
 	"net/url"
 	"time"
@@ -22,6 +23,9 @@ type settings struct {
 	limits      api.Limits  // all but Limiter, which run sets
 	redisURL    string      // the Valkey that every copy of the API shares
 	pprofAddr   string      // where to serve profiles; "" serves none
+	// shutdownDelay is how long the API keeps serving after SIGTERM with /readyz failing, so load
+	// balancers stop sending it requests before it stops taking them.
+	shutdownDelay time.Duration
 }
 
 // loadSettings reads the API's settings from sources, the first winning, and reports every missing
@@ -36,6 +40,7 @@ func loadSettings(sources ...config.Source) (settings, error) {
 		// cancelled with it; these catch what that cancel misses. No request needs a transaction open
 		// longer.
 		dbLimits: startup.DBLimits{
+			MaxConns:          r.Count("DB_MAX_CONNS", 10),
 			Statement:         r.Duration("DB_STATEMENT_TIMEOUT", 10*time.Second),
 			IdleInTransaction: r.Duration("DB_IDLE_IN_TRANSACTION_TIMEOUT", 10*time.Second),
 		},
@@ -49,11 +54,12 @@ func loadSettings(sources ...config.Source) (settings, error) {
 			PerIP:          r.Count("RATE_LIMIT_PER_IP", 600),
 			PerUser:        r.Count("RATE_LIMIT_PER_USER", 120),
 		},
-		redisURL:  r.Required("REDIS_URL"),
-		pprofAddr: r.String("PPROF_ADDR", ""),
+		redisURL:      r.Required("REDIS_URL"),
+		pprofAddr:     r.String("PPROF_ADDR", ""),
+		shutdownDelay: r.Duration("SHUTDOWN_DELAY", 0),
 	}
 	err := errors.Join(r.Err(), checkKeysURL(s.app.Env, s.auth.KeysURL), checkTrustedProxies(s.limits.TrustedProxies),
-		startup.CheckProfileAddr(s.pprofAddr))
+		startup.CheckProfileAddr(s.pprofAddr), checkShutdownDelay(s.shutdownDelay), startup.CheckMaxConns(s.dbLimits.MaxConns))
 	if err != nil {
 		return settings{}, err
 	}
@@ -93,6 +99,17 @@ func checkTrustedProxies(ranges []string) error {
 		case prefix.Addr().Is4In6():
 			return errors.New("TRUSTED_PROXIES must write IPv4 ranges as IPv4 (10.0.0.0/8, not ::ffff:10.0.0.0/104)")
 		}
+	}
+	return nil
+}
+
+// maxShutdownDelay is the longest SHUTDOWN_DELAY: load balancers notice a failing /readyz within
+// seconds, and the platform kills a program that takes longer to stop than it allows.
+const maxShutdownDelay = time.Minute
+
+func checkShutdownDelay(d time.Duration) error {
+	if d > maxShutdownDelay {
+		return fmt.Errorf("SHUTDOWN_DELAY must be at most %s, got %s", maxShutdownDelay, d)
 	}
 	return nil
 }

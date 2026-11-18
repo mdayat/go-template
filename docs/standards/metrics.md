@@ -19,13 +19,20 @@ don't overwrite each other's numbers).
   `internal/api/telemetry.go`): `http.server.request.duration` (seconds) by `http.route` (the pattern,
   `/web/tasks/{id}`; a path no route matches has its client's prefix, `/web/*`), method and
   status; its count is the number of requests, so 401s, 404s and 429s show too, a client that hung up before the reply as 499, and a reply a panic cut off midway
-  with `error.type` `aborted`. The health check isn't recorded, nor otelhttp's body-size histograms
-  (dropped in `internal/telemetry`).
+  with `error.type` `aborted`. The health and readiness checks aren't recorded, nor otelhttp's
+  body-size histograms (dropped in `internal/telemetry`).
 <!-- remove:end -->
 <!-- remove:worker -->
 - **Jobs** (worker; our own, as asynq has none; `internal/worker/logging.go`): `job.run.duration`
   (seconds) by `job.type`, `job.queue` and `job.result` (`succeeded`, `retrying`, `failed` for
   good), recorded where each run's log line is written, with the same result.
+- **Job queues** (worker; `valkey.RecordQueues`), read from Valkey each time metrics are sent:
+  `job.queue.jobs` by `job.queue` and `job.state` (`waiting`: queued, not yet taken; `running`;
+  `retrying`: failed, waiting for the next try), and `job.queue.oldest_wait` (seconds): how long
+  the oldest waiting job has waited, 0 when none waits. Every worker instance reports the same
+  numbers for every queue: take the highest (`max`), never the sum. asynq reads them with a script
+  that runs Valkey's `MEMORY USAGE`: where a managed Valkey or the app's user is refused that
+  command, each queue is left out with a warning in the log, and the alert below stays silent.
 <!-- remove:end -->
 - **Database, from the program's side** ([otelpgx](https://github.com/exaring/otelpgx),
   `startup.ConnectDB`): `db.client.operation.duration` (seconds) per query, named by its sqlc name
@@ -233,9 +240,17 @@ The worker:
   )
   ```
 
-Not covered: a worker that runs but takes no jobs (nothing measures how many wait in the queue;
-asynq's `Inspector` can, as a metric of your own), and a job that hangs (a run records nothing
-until it ends; its time limit ends it). The purge alert catches a stuck worker within a day.
+- **Jobs waiting too long**: a queue's oldest waiting job has waited over 5 minutes, for 10
+  minutes. The worker is stuck, too few instances run for the work, or no instance takes that
+  queue (`WORKER_QUEUES`, [worker.md](worker.md#queues)). Only workers send these numbers: with
+  every worker down there are none, and "Stopped sending metrics" fires instead. Raise the 5
+  minutes for a queue meant to be slow.
+
+  ```promql
+  max by (job, job_queue) (job_queue_oldest_wait_seconds) > 300
+  ```
+
+Not covered: a job that hangs (a run records nothing until it ends; its time limit ends it).
 <!-- remove:end -->
 <!-- remove:valkey -->
 

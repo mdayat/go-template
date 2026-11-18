@@ -56,12 +56,12 @@ func mentions() map[string][]string {
 			"cmd/api", "internal/api", "http-api.md", "HTTP_ADDR", "testAPI", "/healthz",
 			"internal/auth", "devtoken", "dev-token", "AUTH_JWKS_URL", "AUTH_ISSUER", "AUTH_AUDIENCE",
 			"TRUSTED_PROXIES", "RATE_LIMIT_PER_IP", "RATE_LIMIT_PER_USER", "internal/ratelimit", "redis_rate",
-			"otelhttp", "http.server.request.duration", "api.json",
+			"otelhttp", "http.server.request.duration", "api.json", "/readyz", "SHUTDOWN_DELAY",
 		},
 		"worker": {
 			"cmd/worker", "internal/worker", "internal/jobs", "internal/queue", "testqueue", "worker.md",
 			"testWorker", "run-worker", "PURGE_WEBHOOK_URL", "deleted-row-purges", "asynq",
-			"job.run.duration", "worker.json", "admin.Purges",
+			"job.run.duration", "worker.json", "admin.Purges", "WORKER_QUEUES", "job.queue", "job_queue",
 		},
 	}
 }

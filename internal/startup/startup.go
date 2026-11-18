@@ -4,6 +4,7 @@ package startup
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -25,6 +26,19 @@ import (
 )
 
 const connectTimeout = 5 * time.Second
+
+// MaxDBConns is the most DB_MAX_CONNS may be: Postgres's own limit on connections is usually in the
+// hundreds, and a pool larger than this is a typo.
+const MaxDBConns = 1000
+
+// CheckMaxConns reports whether n is a DB_MAX_CONNS ConnectDB takes, for a program's settings to
+// report with the others before connecting.
+func CheckMaxConns(n int) error {
+	if n < 1 || n > MaxDBConns {
+		return fmt.Errorf("DB_MAX_CONNS must be from 1 to %d, got %d", MaxDBConns, n)
+	}
+	return nil
+}
 
 // SetupLogger sets the global logger's level and, in development, readable output.
 func SetupLogger(app config.App) {
@@ -68,10 +82,14 @@ func Version(buildVersion string) string {
 	return revision
 }
 
-// DBLimits are Postgres's own time limits on each of a pool's connections. When a context ends, pgx
-// already asks Postgres to stop the query; these stop what that can't reach: a query or transaction
-// left running when the program is killed, or when the cancel request is lost on the network.
+// DBLimits are how many connections a pool opens, and Postgres's own time limits on each. When a
+// context ends, pgx already asks Postgres to stop the query; the time limits stop what that can't
+// reach: a query or transaction left running when the program is killed, or when the cancel request
+// is lost on the network.
 type DBLimits struct {
+	// MaxConns is the most connections the pool opens at once (pgx's pool_max_conns, whose own
+	// default is the number of CPUs, at least 4); a query waits for a free one.
+	MaxConns int
 	// Statement is the longest one statement may run (statement_timeout); Postgres then cancels it.
 	Statement time.Duration
 	// IdleInTransaction is the longest a transaction may stay open with nothing running
@@ -80,8 +98,8 @@ type DBLimits struct {
 	IdleInTransaction time.Duration
 }
 
-// ConnectDB returns a pool on url once a connection works, so a wrong URL fails at startup. Every
-// connection has limits, and url must not set them too. It records to meters, from the app's side:
+// ConnectDB returns a pool on url once a connection works, so a wrong URL fails at startup. The pool
+// and every connection have limits, and url must not set them too. It records to meters, from the app's side:
 // each query's time (by its sqlc name), and the pool's use (connections in use and idle, waits for
 // a free one), which the database itself can't see. Each query in a traced request or job is a span
 // in tracers ("query GetTask"), with its SQL but not its values (a failed query's error message can
@@ -119,6 +137,14 @@ func ConnectDB(ctx context.Context, url string, limits DBLimits, meters metric.M
 		// Postgres reads a number without a unit as milliseconds.
 		params[l.name] = strconv.FormatInt(l.value.Milliseconds(), 10)
 	}
+	if err := CheckMaxConns(limits.MaxConns); err != nil {
+		return nil, err
+	}
+	// pgx has already taken it out of the parsed settings, so look in the URL itself.
+	if strings.Contains(strings.ToLower(url), "pool_max_conns") {
+		return nil, errors.New("DATABASE_URL sets pool_max_conns: set DB_MAX_CONNS instead")
+	}
+	cfg.MaxConns = int32(limits.MaxConns) //nolint:gosec // CheckMaxConns above keeps it within 1 to 1000
 	cfg.ConnConfig.Tracer = otelpgx.NewTracer(
 		otelpgx.WithMeterProvider(meters),
 		otelpgx.WithTracerProvider(tracers),
@@ -152,6 +178,24 @@ func ConnectDB(ctx context.Context, url string, limits DBLimits, meters metric.M
 	}
 	return pool, nil
 }
+
+// remove:api
+
+// DBReady returns the API's readiness check (/readyz): the database answers a ping. A ping first
+// takes a free connection, so with every connection busy (slow queries, a burst) it would fail on
+// every instance at once and the load balancer would drop them all, turning busy into down: a pool
+// that's full when the time runs out counts as ready.
+func DBReady(pool *pgxpool.Pool) func(context.Context) error {
+	return func(ctx context.Context) error {
+		err := pool.Ping(ctx)
+		if stat := pool.Stat(); err != nil && ctx.Err() != nil && stat.AcquiredConns() >= stat.MaxConns() {
+			return nil
+		}
+		return err
+	}
+}
+
+// remove:end
 
 // queryName names a query for its metrics and span: sqlc's name for it ("GetTask", from its first
 // line, "-- name: GetTask :one"), else its first SQL word ("SELECT"). Never the SQL itself: metrics

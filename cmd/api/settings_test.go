@@ -32,7 +32,7 @@ func TestLoadSettings(t *testing.T) {
 		app:         config.App{Env: config.EnvProduction, LogLevel: zerolog.InfoLevel},
 		httpAddr:    ":8080",
 		databaseURL: "postgres://localhost/app",
-		dbLimits:    startup.DBLimits{Statement: 10 * time.Second, IdleInTransaction: 10 * time.Second},
+		dbLimits:    startup.DBLimits{MaxConns: 10, Statement: 10 * time.Second, IdleInTransaction: 10 * time.Second},
 		auth: jwks.Config{
 			KeysURL: "https://keys.example.com/jwks.json", Issuer: "https://issuer.example.com", Audience: "app",
 		},
@@ -54,15 +54,20 @@ func TestLoadSettings(t *testing.T) {
 		"RATE_LIMIT_PER_IP":   "0",
 		"RATE_LIMIT_PER_USER": "30",
 
+		"DB_MAX_CONNS":                   "25",
 		"DB_STATEMENT_TIMEOUT":           "30s",
 		"DB_IDLE_IN_TRANSACTION_TIMEOUT": "2s",
 		"PPROF_ADDR":                     "127.0.0.1:6060",
+		"SHUTDOWN_DELAY":                 "5s",
 	})
 	if err != nil || got.httpAddr != ":9090" {
 		t.Errorf("loadSettings() httpAddr = %q, error = %v; want :9090, nil", got.httpAddr, err)
 	}
-	if want := (startup.DBLimits{Statement: 30 * time.Second, IdleInTransaction: 2 * time.Second}); got.dbLimits != want {
+	if want := (startup.DBLimits{MaxConns: 25, Statement: 30 * time.Second, IdleInTransaction: 2 * time.Second}); got.dbLimits != want {
 		t.Errorf("loadSettings() dbLimits = %+v, want %+v", got.dbLimits, want)
+	}
+	if got.shutdownDelay != 5*time.Second {
+		t.Errorf("loadSettings() shutdownDelay = %s, want 5s", got.shutdownDelay)
 	}
 	if got.pprofAddr != "127.0.0.1:6060" {
 		t.Errorf("loadSettings() pprofAddr = %q, want 127.0.0.1:6060", got.pprofAddr)
@@ -165,5 +170,42 @@ func TestLoadSettingsKeepsProfilesLocal(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "PPROF_ADDR") {
 		t.Errorf("loadSettings(PPROF_ADDR=:6060) error = %v, want one naming PPROF_ADDR", err)
+	}
+}
+
+// Past a minute, the platform has likely killed the API before it stops: a typo, not a choice. Like
+// every length of time, 0s is refused: no delay is the setting left unset.
+func TestLoadSettingsChecksShutdownDelay(t *testing.T) {
+	t.Parallel()
+	for value, ok := range map[string]bool{"1m": true, "61s": false, "0s": false} {
+		_, err := loadSettings(config.Map{
+			"DATABASE_URL":   "x",
+			"AUTH_JWKS_URL":  "https://keys.example.com/jwks.json",
+			"AUTH_ISSUER":    "i",
+			"AUTH_AUDIENCE":  "a",
+			"REDIS_URL":      "y",
+			"SHUTDOWN_DELAY": value,
+		})
+		if (err == nil) != ok {
+			t.Errorf("SHUTDOWN_DELAY=%s: loadSettings() error = %v, want ok = %v", value, err, ok)
+		}
+	}
+}
+
+// A pool size ConnectDB would refuse is reported with the other settings, before connecting.
+func TestLoadSettingsChecksPoolSize(t *testing.T) {
+	t.Parallel()
+	for value, ok := range map[string]bool{"1": true, "1000": true, "0": false, "1001": false} {
+		_, err := loadSettings(config.Map{
+			"DATABASE_URL":  "x",
+			"AUTH_JWKS_URL": "https://keys.example.com/jwks.json",
+			"AUTH_ISSUER":   "i",
+			"AUTH_AUDIENCE": "a",
+			"REDIS_URL":     "y",
+			"DB_MAX_CONNS":  value,
+		})
+		if (err == nil) != ok {
+			t.Errorf("DB_MAX_CONNS=%s: loadSettings() error = %v, want ok = %v", value, err, ok)
+		}
 	}
 }

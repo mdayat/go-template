@@ -93,7 +93,7 @@ func TestPurgeDeletedRowsQueueDownIs500(t *testing.T) {
 	authn, issuer := testAuthenticator(t)
 	pool := testdb.New(t)
 	testUser(t, pool, true)
-	router := signedIn(NewRouter(zerolog.Nop(), noop.NewMeterProvider(), tracenoop.NewTracerProvider(), NewServices(db.New(pool), valkey.NewEnqueuer(down, tracenoop.NewTracerProvider())), authn, Limits{}),
+	router := signedIn(NewRouter(zerolog.Nop(), noop.NewMeterProvider(), tracenoop.NewTracerProvider(), NewServices(db.New(pool), valkey.NewEnqueuer(down, tracenoop.NewTracerProvider())), NewReadiness(pool.Ping, zerolog.Nop()), authn, Limits{}),
 		issuer.Token(testSubject))
 
 	rec := send(t, router, http.MethodPost, "/admin/deleted-row-purges", `{"older_than_days":30}`)

@@ -114,12 +114,12 @@ Go's JSON reading (go-json and the standard library alike, with no setting to ch
 `detail` and `message` are for people; clients branch on `status` and the field's `rule`. Unknown
 paths get a 404 problem and wrong methods a 405 with an `Allow` header, signed in or not. Every GET route also
 answers HEAD (HTTP requires it; uptime checkers use it). An error reply drops any
-headers the handler had set that describe a body (`Content-Encoding`, `Cache-Control`, `ETag`,
-...), since they'd misdescribe the problem.
+headers the handler had set that describe a body (`Content-Encoding`, `ETag`, ...), since they'd
+misdescribe the problem, and is never cached (`Cache-Control: no-store`).
 
 ## Signing in
 
-Every route but `/healthz` needs someone signed in: the request carries
+Every route but `/healthz` and `/readyz` needs someone signed in: the request carries
 `Authorization: Bearer <token>`, and `authenticate` (`internal/api/auth.go`) asks the
 `Authenticator` that `cmd/api` passed in whose token it is.
 
@@ -170,7 +170,7 @@ decides: the rules live in one place, the same for every entry point. In the tas
 
 ## Rate limits
 
-Every route but `/healthz` has two limits (`internal/api/ratelimit.go`):
+Every route but `/healthz` and `/readyz` has two limits (`internal/api/ratelimit.go`):
 
 - **Per client IP, signed out** (`RATE_LIMIT_PER_IP`, default 600 a minute): requests without a
   valid sign-in (no token, or a refused one), so a flood of bad tokens is cut off with a 429 instead
@@ -236,10 +236,27 @@ ends after 8 s (`RequestTimeout` in `internal/api/router.go`): its queries are c
 caller gets a 503, "the request took too long". Pass `r.Context()` to everything a handler calls,
 or the time limit can't stop it.
 
-On SIGTERM the server stops taking new requests and waits up to 8 s for running ones
-(`shutdownTimeout` in `cmd/api/main.go`): each request's context has ended by then, and it's below
-Docker's default 10 s before a hard kill, the shortest common wait. Any still running then have
+Two checks tell the platform about each instance (one running copy of the API). `/healthz` answers
+200 while the process runs: point the platform's restart check at it. `/readyz` answers 200 while
+the database answers within 1 s, else 503: point the load balancer's check at it, so it sends
+requests only to instances that can serve them. Valkey isn't checked: without it the API still
+serves (rate limits count in memory), and a check every instance fails would take them all out.
+Neither needs a sign-in, is rate limited or is traced. A successful `/healthz` isn't logged, and
+`/readyz` logs only when its answer changes.
+
+On SIGTERM, `/readyz` answers 503 at once, and the API keeps serving for `SHUTDOWN_DELAY` (unset:
+none), long enough for the load balancer to notice and stop sending requests; otherwise the ones it
+sends meanwhile are refused. Then the server stops taking new requests and waits up to 8 s for
+running ones (`shutdownTimeout` in `cmd/api/main.go`): each request's context has ended by then.
+With no delay that's below Docker's default 10 s before a hard kill, the shortest common wait;
+with one, give the platform at least the delay plus 10 s. Any requests still running then have
 their connections closed, and the process exits.
+
+Every reply carries `Cache-Control: no-store`, so a proxy or CDN in between never keeps one user's
+reply and hands it to another. A route whose reply is the same for everyone and may be cached sets
+its own `Cache-Control`. HSTS (telling browsers to use only HTTPS) belongs where HTTPS ends, the
+load balancer or CDN. Headers that guard web pages (`Content-Security-Policy`, `X-Frame-Options`)
+do nothing for JSON replies; each carries `X-Content-Type-Options: nosniff`.
 
 Work that takes long and doesn't need to finish before the reply (a report, sending email)
 doesn't belong in a request: it runs after the reply, outside the request.

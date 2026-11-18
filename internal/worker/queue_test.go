@@ -64,7 +64,7 @@ func runTracedOnQueue(
 	mux.Use(logJobs(zerolog.New(lines), noop.Float64Histogram{}, running.Tracer("")))
 	mux.Handle("test:job", handler)
 	server, err := valkey.NewServer(client, mux, valkey.ServerOptions{
-		Queues: []string{queueName}, ShutdownTimeout: time.Second, Logger: zerolog.Nop(),
+		Queues: []queue.Limit{{Queue: queueName, Concurrency: 10}}, ShutdownTimeout: time.Second, Logger: zerolog.Nop(),
 	})
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)

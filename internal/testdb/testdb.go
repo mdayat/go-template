@@ -77,8 +77,9 @@ func New(tb testing.TB) *pgxpool.Pool {
 			tb.Logf("testdb: kept database %s", name)
 			return
 		}
-		// tb.Context() is already cancelled when cleanups run.
-		ctx, cancel := context.WithTimeout(context.WithoutCancel(tb.Context()), 10*time.Second)
+		// tb.Context() is already cancelled when cleanups run. A minute: on a busy machine, a full run
+		// with many packages at once can keep Postgres from dropping a database within seconds.
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(tb.Context()), time.Minute)
 		defer cancel()
 		if _, err := srv.admin.Exec(ctx, "DROP DATABASE "+ident(name)); err != nil {
 			tb.Errorf("testdb: drop database %s: %v", name, err)

@@ -69,6 +69,8 @@ func TestLogJobs(t *testing.T) {
 	// A queue's own rule may retry a run marked not to be (asynq does past the time limit).
 	queueRetries := firstOfFour
 	queueRetries.WillRetry = func(error) bool { return true }
+	queuedByRequest := firstOfFour
+	queuedByRequest.RequestID = "req-1"
 	base := map[string]any{
 		"job_type": "test:job", "job_id": "job-1", "queue": "default", "duration_ms": anyNumber,
 		"message": "job completed",
@@ -85,6 +87,11 @@ func TestLogJobs(t *testing.T) {
 			name: "success is info", run: firstOfFour,
 			handler:  func(context.Context, []byte) error { return nil },
 			wantLine: map[string]any{"level": "info", "attempt": 1.0, "max_attempts": 4.0},
+		},
+		{
+			name: "a job a request queued carries the request's ID", run: queuedByRequest,
+			handler:  func(context.Context, []byte) error { return nil },
+			wantLine: map[string]any{"level": "info", "attempt": 1.0, "max_attempts": 4.0, "request_id": "req-1"},
 		},
 		{
 			name: "failure with retries left is warn", run: firstOfFour, handler: failing,

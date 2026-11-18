@@ -292,7 +292,7 @@ func TestRateLimitWithoutLimiterPanics(t *testing.T) {
 			t.Error("NewRouter() with a limit and no Limiter didn't panic")
 		}
 	}()
-	NewRouter(zerolog.Nop(), noop.NewMeterProvider(), tracenoop.NewTracerProvider(), Services{}, nil, Limits{PerIP: 1})
+	NewRouter(zerolog.Nop(), noop.NewMeterProvider(), tracenoop.NewTracerProvider(), Services{}, nil, nil, Limits{PerIP: 1})
 }
 
 // Load balancers check the health route often, from few IPs: it's never limited.

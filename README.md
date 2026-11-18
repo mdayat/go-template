@@ -42,7 +42,7 @@ jobs. Keep both, one or neither: see [Choose what you need](#choose-what-you-nee
 | Path | What |
 |---|---|
 | `cmd/api` | the HTTP server: settings, Postgres pool, timeouts, clean shutdown on SIGTERM |
-| `internal/api` | routes per client (`mobile/` at `/mobile/v1`, `web/` at `/web`, `admin/` at `/admin`; helpers they share in `handler/`), one JSON log line per request, [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) error replies, JSON body reading, sign-in and [rate limits](docs/standards/http-api.md#rate-limits) on every route but the health check |
+| `internal/api` | routes per client (`mobile/` at `/mobile/v1`, `web/` at `/web`, `admin/` at `/admin`; helpers they share in `handler/`), one JSON log line per request, [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) error replies, JSON body reading, sign-in and [rate limits](docs/standards/http-api.md#rate-limits) on every route but the health and readiness checks |
 | `internal/auth` | who signed in, as a provider proved it; `internal/auth/jwks` checks JWTs against the issuer's published keys (Firebase, Auth0, Cognito, Keycloak, Supabase; see [signing in](docs/standards/http-api.md#signing-in)) |
 | `internal/ratelimit` | counting requests for the rate limits: in Valkey (`internal/ratelimit/valkey`), shared by every copy of the API, or in memory |
 | `internal/authtest`, `scripts/devtoken` | a stand-in sign-in provider: for tests, and for local runs (`make dev-token`) |
@@ -113,8 +113,8 @@ jobs. Keep both, one or neither: see [Choose what you need](#choose-what-you-nee
    `DATABASE_URL` and `TEST_DATABASE_URL` in `.env`.
    <!-- remove:api -->
    - Run `make dev-token user=alice` once: it makes the local sign-in key the API needs, and prints
-     a token. Start the API with `make run`, then open http://localhost:8080/healthz; every other
-     route needs `Authorization: Bearer <token>`.
+     a token. Start the API with `make run`, then open http://localhost:8080/healthz; every route
+     but it and `/readyz` needs `Authorization: Bearer <token>`.
    <!-- remove:end -->
    <!-- remove:valkey -->
    If another Redis already uses port 6379, change `VALKEY_PORT` and the port in `REDIS_URL` and
@@ -137,6 +137,7 @@ jobs. Keep both, one or neither: see [Choose what you need](#choose-what-you-nee
 | `make check-versions` | fail if Go's or Atlas's version differs between the places it's pinned |
 | `make vuln` | known vulnerabilities in dependencies |
 | `make image` | build each program's image and the migrate image |
+| `make scan` | build the images and fail on a serious known hole, with a fix out, in their system packages (needs [Trivy](https://trivy.dev); CI runs it) |
 | `make test-db-clean` | drop databases that failed tests kept for inspection |
 | `make telemetry-up` / `make telemetry-down` | start / stop Prometheus, Jaeger (http://localhost:16686) and Grafana (http://localhost:3000) for local metrics and traces; `.env` from `.example.env` already sends to them |
 
@@ -154,22 +155,31 @@ Before you push: `make fmt lint test check-generated`. The database workflow is 
 ### Keeping dependencies up to date
 
 Run Dependabot when you want updates: on GitHub, **Insights → Dependency graph → Dependabot →
-Check for updates** (it also runs once a quarter, in case nobody does). Each run opens at most
-four pull requests, one each for Go modules (the app's and the tools'), GitHub Actions, the
-Dockerfile's base images and the local Prometheus, Jaeger and Grafana in `compose.yaml`; merge each
-once CI passes (CI doesn't start those three: try theirs with `make telemetry-up` first), or close
-it to skip. When one update in a pull request breaks CI (a new lint rule, a changed API),
-fix the code in that pull request, or add the dependency to `ignore` in `.github/dependabot.yml`
-and check for updates again. Known security holes don't wait for Dependabot: `make vuln`, in CI,
-fails on them. Two versions are changed by hand, everywhere at once (`make check-versions`, run
+Check for updates** (it also runs once a quarter, in case nobody does, and every week for the
+Dockerfile's base images: they're pinned by digest, so a security fix to one arrives only this
+way). Each run opens at most four pull requests, one each for Go modules (the app's and the
+tools'), GitHub Actions, the Dockerfile's base images and the local Prometheus, Jaeger and Grafana
+in `compose.yaml`; merge each once CI passes (CI doesn't start those three: try theirs with `make
+telemetry-up` first), or close it to skip. When one update in a pull request breaks CI (a new lint
+rule, a changed API), fix the code in that pull request, or add the dependency to `ignore` in
+`.github/dependabot.yml` and check for updates again. Known security holes don't wait for
+Dependabot: `make vuln` (the Go code) and `make scan` (the images' system packages), in CI, fail on
+them. Two versions are changed by hand, everywhere at once (`make check-versions`, run
 by CI, fails until they agree):
 
 - **Go:** the `go` line in `go.mod` and `tools/go.mod`, and the Dockerfile's `golang` image.
   Dependabot's pull request for a newer `golang` image is the reminder; `make vuln` also reports
   a known hole in the Go version in use.
-- **Atlas:** the Dockerfile's `arigaio/atlas` image, and `ATLAS_VERSION` with `ATLAS_SHA256` in
-  `.github/workflows/code_quality_checks.yaml` (the checksum of the file CI downloads, from
-  `shasum -a 256`).
+- **Atlas:** the Dockerfile's `arigaio/atlas` image (its tag and digest), and `ATLAS_VERSION`
+  with `ATLAS_SHA256` in `.github/workflows/code_quality_checks.yaml` (the checksum of the file CI
+  downloads, from `shasum -a 256`).
+
+Trivy, which `make scan` runs, is pinned only in CI's install step: change `TRIVY_VERSION` and
+`TRIVY_SHA256` together, with the checksum from the release's `checksums.txt`. Its list of known
+holes changes daily, so `make scan` can fail with no change of yours: update the image it names
+(Dependabot's base-image pull request, or Atlas by hand). A hole that doesn't affect you, or that
+waits on an image you can't update yet, goes in a `.trivyignore` file, its ID with a comment
+saying why.
 
 ## Replacing the example
 
@@ -245,8 +255,9 @@ to follow, not code that's checked):
    long-running program also serves profiles if asked (`startup.ServeProfiles`) and starts
    telemetry (`telemetry.Start`, `Flush` last on the way out); a short one passes no-op providers
    instead, as `cmd/oneoff` does.
-4. Connect (`startup.ConnectDB`, with [time limits](docs/standards/database.md#time-limits) fit
-   for its work, and the providers from step 3), closing each connection on the way out.
+4. Connect (`startup.ConnectDB`, with a [pool size](docs/standards/database.md#connections) and
+   [time limits](docs/standards/database.md#time-limits) fit for its work, and the providers from
+   step 3), closing each connection on the way out.
 5. Do its work until the context ends, then stop within the time the platform gives between
    SIGTERM and a hard kill (Docker: 10 s by default; Kubernetes and ECS: 30 s).
 6. Return errors to `main`, which logs the one that stopped it and exits 1.
@@ -290,9 +301,12 @@ programs refuse one there). Without a container limit, or one that can't be read
 nothing changes.
 
 <!-- remove:api -->
-The API serves `GET /healthz` on port 8080: point the platform's health check at it. The image
-has no shell, so a Docker `HEALTHCHECK` can't run inside it. On SIGTERM the API refuses new
-requests, gives running ones up to 8 s, then closes whatever is left and exits.
+The API serves `GET /healthz` on port 8080: point the platform's restart check at it. Point the
+load balancer's check at `GET /readyz`, which fails while the database doesn't answer and once the
+API is shutting down ([server settings](docs/standards/http-api.md#server-settings)). The image has
+no shell, so a Docker `HEALTHCHECK` can't run inside it. On SIGTERM the API keeps serving for
+`SHUTDOWN_DELAY` (about `5s` behind a load balancer; unset, none), then refuses new requests, gives
+running ones up to 8 s, closes whatever is left and exits.
 
 Behind a load balancer or CDN, set `TRUSTED_PROXIES` to its IP ranges, or every signed-out client
 shares one rate limit (the proxy's); see [rate limits](docs/standards/http-api.md#rate-limits).
@@ -325,3 +339,11 @@ overrides a single value, and the source's own login (client ID, secret) comes f
 Values fetched this way reach only the settings in `settings.go`, never the environment, so a
 library that reads its own variable (pgx's `PGPASSWORD`, the AWS SDK's keys) won't see them: put a
 database password in `DATABASE_URL`, and pass other libraries their values in code.
+
+### Switching a feature off
+
+To ship code before it's ready, put it behind an on/off setting read in `settings.go` like any
+other, off unless set. Once the feature is on everywhere, delete the setting and the code for
+"off": a switch left behind is a second path nobody tests. To switch per user, or without a
+restart, use a feature-flag service, through [OpenFeature](https://openfeature.dev) (a standard Go
+interface any such service plugs into), so changing service changes no code.

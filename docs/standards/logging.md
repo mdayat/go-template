@@ -39,7 +39,9 @@ that line, and a panic its stack: there is never a second line for the same fail
   `TRUSTED_PROXIES`, the address the proxy added to `X-Forwarded-For`, with no `client.port`
   (the connection's is the proxy's). When it can't be told (an unreadable `X-Forwarded-For`),
   `client.address` is the connection's address instead.
-- A successful `/healthz` isn't logged: load balancers call it every few seconds.
+- A successful `/healthz` isn't logged, nor `/readyz` unless it panics: they're called every few
+  seconds. `/readyz` logs when its answer changes instead
+  ([http-api.md](http-api.md#server-settings)).
 - A request whose trace is kept carries `trace.id` and `span.id`, on its summary line and on every
   line logged during it ([tracing.md](tracing.md)).
 
@@ -47,7 +49,8 @@ that line, and a panic its stack: there is never a second line for the same fail
 <!-- remove:worker -->
 ### Jobs
 
-One `job completed` line per run, with the error on it ([worker.md](worker.md#logging)).
+One `job completed` line per run, with the error on it, and the `request_id` of the request that
+queued the job, if one did ([worker.md](worker.md#logging)).
 
 <!-- remove:end -->
 ### One-off commands

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/hibiken/asynq"
@@ -17,8 +18,9 @@ import (
 
 // ServerOptions configures a Server.
 type ServerOptions struct {
-	// Queues are the queues the server takes jobs from, all with the same priority; at least one.
-	Queues []string
+	// Queues are the queues the server takes jobs from, at least one, each with how many of its
+	// jobs run at once.
+	Queues []queue.Limit
 	// ShutdownTimeout is how long running jobs get to finish after Shutdown, at least a second;
 	// asynq then puts the ones still running back in their queue and cancels their contexts.
 	ShutdownTimeout time.Duration
@@ -28,14 +30,17 @@ type ServerOptions struct {
 
 // Server takes jobs off the queues and runs them through a queue.Mux.
 type Server struct {
-	server *asynq.Server
-	client redis.UniversalClient
-	mux    *queue.Mux
+	// One asynq server per queue: asynq's limit is per server, shared by all of its queues, and
+	// its queue priorities only change which queue is picked first.
+	servers []*asynq.Server
+	client  redis.UniversalClient
+	mux     *queue.Mux
 }
 
 // NewServer returns a server that runs the jobs in opts.Queues through mux. It doesn't close client.
 // It refuses options asynq would quietly replace: no queues (asynq reads "default"), a blank queue
-// name, or no shutdown time (asynq waits 8 s).
+// name, a limit under 1 (asynq runs as many jobs as there are CPUs), or no shutdown time (asynq
+// waits 8 s); and a queue listed twice.
 func NewServer(client redis.UniversalClient, mux *queue.Mux, opts ServerOptions) (*Server, error) {
 	if len(opts.Queues) == 0 {
 		return nil, errors.New("a server needs at least one queue")
@@ -43,32 +48,50 @@ func NewServer(client redis.UniversalClient, mux *queue.Mux, opts ServerOptions)
 	if opts.ShutdownTimeout < time.Second {
 		return nil, fmt.Errorf("shutdown timeout %s is under a second", opts.ShutdownTimeout)
 	}
-	queues := make(map[string]int, len(opts.Queues))
-	for _, name := range opts.Queues {
-		if strings.TrimSpace(name) == "" {
+	s := &Server{client: client, mux: mux}
+	seen := make(map[string]bool, len(opts.Queues))
+	for _, q := range opts.Queues {
+		switch {
+		case strings.TrimSpace(q.Queue) == "":
 			return nil, errors.New("a server's queue name is blank")
+		case seen[q.Queue]:
+			return nil, fmt.Errorf("queue %s is listed twice", q.Queue)
+		case q.Concurrency < 1:
+			return nil, fmt.Errorf("queue %s: %d jobs at once, want at least 1", q.Queue, q.Concurrency)
 		}
-		queues[name] = 1
-	}
-	return &Server{
-		server: asynq.NewServerFromRedisClient(client, asynq.Config{
-			Queues:          queues,
+		seen[q.Queue] = true
+		s.servers = append(s.servers, asynq.NewServerFromRedisClient(client, asynq.Config{
+			Queues:          map[string]int{q.Queue: 1},
+			Concurrency:     q.Concurrency,
 			ShutdownTimeout: opts.ShutdownTimeout,
 			Logger:          asynqLogger{logger: opts.Logger},
-		}),
-		client: client,
-		mux:    mux,
-	}, nil
+		}))
+	}
+	return s, nil
 }
 
-// Start starts taking jobs, without blocking.
+// Start starts taking jobs from every queue, without blocking. If one queue can't start, the ones
+// started are stopped again.
 func (s *Server) Start() error {
-	return s.server.Start(asynq.HandlerFunc(s.process))
+	for i, server := range s.servers {
+		if err := server.Start(asynq.HandlerFunc(s.process)); err != nil {
+			for _, started := range s.servers[:i] {
+				started.Shutdown()
+			}
+			return err
+		}
+	}
+	return nil
 }
 
-// Shutdown stops taking jobs and waits up to ShutdownTimeout for running ones.
+// Shutdown stops taking jobs and waits up to ShutdownTimeout for running ones: all queues at once,
+// so the wait isn't that times the number of queues.
 func (s *Server) Shutdown() {
-	s.server.Shutdown()
+	var wg sync.WaitGroup
+	for _, server := range s.servers {
+		wg.Go(server.Shutdown)
+	}
+	wg.Wait()
 }
 
 // process runs one asynq task through the mux, with the run's details in its context, and the
@@ -85,6 +108,7 @@ func (s *Server) process(ctx context.Context, t *asynq.Task) error {
 		Queue:       queueName,
 		Attempt:     retried + 1,
 		MaxAttempts: maxRetry + 1,
+		RequestID:   t.Headers()[requestIDHeader],
 		WillRetry:   func(err error) bool { return willRetry(ctx, err, retried, maxRetry) },
 	}
 

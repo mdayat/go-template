@@ -54,7 +54,7 @@ func testAPIWith(t *testing.T, limits Limits) (http.Handler, *pgxpool.Pool, *aut
 		// remove:end
 	)
 	authn, issuer := testAuthenticator(t)
-	return NewRouter(zerolog.Nop(), noop.NewMeterProvider(), tracenoop.NewTracerProvider(), services, authn, limits), pool, issuer
+	return NewRouter(zerolog.Nop(), noop.NewMeterProvider(), tracenoop.NewTracerProvider(), services, NewReadiness(pool.Ping, zerolog.Nop()), authn, limits), pool, issuer
 }
 
 // testSubject is who testAPI's requests are signed in as.

@@ -13,6 +13,7 @@ import (
 
 	"github.com/hibiken/asynq"
 	"github.com/redis/go-redis/v9"
+	"github.com/rs/zerolog/hlog"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/propagation"
@@ -71,6 +72,9 @@ func (e *Enqueuer) Enqueue(ctx context.Context, job queue.Job) (string, error) {
 	return info.ID, nil
 }
 
+// requestIDHeader carries the ID of the request that queued a job (queue.Run.RequestID).
+const requestIDHeader = "x-request-id"
+
 // newTask turns job into an asynq task, refusing what asynq would silently change. It checks what
 // asynq itself checks only when queueing (a type, a queue name) too: the scheduler doesn't, and
 // a scheduled job without them would fail only when it fires. The span in ctx goes in the task's
@@ -96,6 +100,10 @@ func newTaskWithHeaders(ctx context.Context, job queue.Job, extra map[string]str
 	}
 	headers := propagation.MapCarrier{}
 	maps.Copy(headers, extra)
+	// Set by the API's request log on the request's context (hlog.RequestIDHandler).
+	if id, ok := hlog.IDFromCtx(ctx); ok {
+		headers[requestIDHeader] = id.String()
+	}
 	if trace.SpanFromContext(ctx).IsRecording() {
 		traceHeaders.Inject(ctx, headers)
 	}

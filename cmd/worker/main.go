@@ -112,13 +112,30 @@ func run() error {
 		return err
 	}
 	server, err := valkey.NewServer(redisClient, mux, valkey.ServerOptions{
-		Queues:          []string{jobs.Queue},
+		Queues:          cfg.queues,
 		ShutdownTimeout: worker.ShutdownTimeout,
 		Logger:          log.Logger,
 	})
 	if err != nil {
 		return err
 	}
+	// Every queue, not only this instance's: one whose jobs no instance takes shows as a growing wait.
+	var queueNames []string
+	for _, q := range jobs.Queues() {
+		queueNames = append(queueNames, q.Queue)
+	}
+	// Its own client, quick to give up: reading the queues mustn't hold up sending the metrics.
+	queueStats, err := startup.RedisFailFast(cfg.redisURL, time.Second, "queue-metrics", providers.Meters, providers.Tracers)
+	if err != nil {
+		return err
+	}
+	defer queueStats.Close()
+	stopRecording, err := valkey.RecordQueues(queueStats, queueNames, providers.Meters, log.Logger)
+	if err != nil {
+		return err
+	}
+	// Before queueStats closes (deferred earlier, so run later).
+	defer stopRecording()
 	if err := server.Start(); err != nil {
 		return fmt.Errorf("start job server: %w", err)
 	}

@@ -23,8 +23,8 @@ import (
 // name them: its time (http.server.request.duration, by route, method and status) and a span
 // ("GET /web/tasks/{id}") that the request's queries, commands, outside calls and queued jobs hang
 // under. The span holds the route pattern as url.path, never the path itself, which can hold an
-// ID, an email or a token. The health check isn't recorded: load balancers call it every few
-// seconds. With both off it adds nothing: otelhttp costs a few microseconds a request even
+// ID, an email or a token. The health and readiness checks aren't recorded: they're called every
+// few seconds. With both off it adds nothing: otelhttp costs a few microseconds a request even
 // recording nowhere.
 func observeRequests(meters metric.MeterProvider, tracers trace.TracerProvider) func(http.Handler) http.Handler {
 	_, metricsOff := meters.(noop.MeterProvider)
@@ -42,7 +42,7 @@ func observeRequests(meters metric.MeterProvider, tracers trace.TracerProvider) 
 	observe := otelhttp.NewMiddleware("http.server",
 		otelhttp.WithMeterProvider(meters),
 		otelhttp.WithTracerProvider(tracers),
-		otelhttp.WithFilter(func(r *http.Request) bool { return r.URL.Path != healthPath }),
+		otelhttp.WithFilter(func(r *http.Request) bool { return r.URL.Path != healthPath && r.URL.Path != readyPath }),
 		// Every caller is outside: a trace a client sends (its traceparent header) is linked, never
 		// continued, or a client could make us keep every request it sends and choose the trace IDs
 		// in our logs. Behind your own services, which do send theirs, drop this.

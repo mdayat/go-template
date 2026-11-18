@@ -25,8 +25,9 @@ HASH := \#
 export DATABASE_URL ?= $(shell sed -nE 's/^(export[[:space:]]+)?DATABASE_URL=//p' .env 2>/dev/null | tail -n 1 \
 	| sed -E -e "s/^\"([^\"]*)\".*/\1/;t" -e "s/^'([^']*)'.*/\1/;t" -e "s/[[:space:]]+$(HASH).*//" -e "s/[[:space:]]+$$//")
 
-.PHONY: fmt lint test test-db-clean vuln build rename image image-migrate image-oneoff db-up db-down \
-	telemetry-up telemetry-down generate check-generated check-versions migrate-diff migrate-apply
+.PHONY: fmt lint test test-db-clean vuln build rename image image-migrate image-oneoff scan db-up \
+	db-down telemetry-up telemetry-down generate check-generated check-versions migrate-diff \
+	migrate-apply
 
 fmt:
 	$(TOOL) golangci-lint fmt ./...
@@ -80,13 +81,16 @@ remove:
 
 IMAGE ?= go-template
 
-# Every image (see Dockerfile): each program's, and the one that applies migrations.
+# Every image (see Dockerfile): each program's, and the one that applies migrations. IMAGES names
+# them all, for scan.
 image: image-migrate
+IMAGES += $(IMAGE)-migrate
 
 image-migrate:
 	docker build --target migrate -t $(IMAGE)-migrate .
 
 image: image-oneoff
+IMAGES += $(IMAGE)-oneoff
 
 image-oneoff:
 	docker build --build-arg VERSION=$$(git describe --always --dirty) --target oneoff -t $(IMAGE)-oneoff .
@@ -94,6 +98,7 @@ image-oneoff:
 # remove:api
 .PHONY: image-api run dev-token
 image: image-api
+IMAGES += $(IMAGE)
 
 image-api:
 	docker build --build-arg VERSION=$$(git describe --always --dirty) --target app -t $(IMAGE) .
@@ -110,6 +115,7 @@ dev-token:
 # remove:worker
 .PHONY: image-worker run-worker
 image: image-worker
+IMAGES += $(IMAGE)-worker
 
 image-worker:
 	docker build --build-arg VERSION=$$(git describe --always --dirty) --target worker -t $(IMAGE)-worker .
@@ -117,6 +123,17 @@ image-worker:
 run-worker:
 	go run ./cmd/worker
 # remove:end
+
+# Builds every image and fails if one has a serious known hole, with a fix out, in its system
+# packages (make vuln checks the Go code, more precisely). Needs trivy (CI installs it). A hole
+# with no fix yet can't be acted on, so it doesn't fail the scan. Every image is scanned before
+# failing, so one run lists them all.
+scan: image
+	@failed=; for image in $(IMAGES); do \
+		trivy image --scanners vuln --pkg-types os --severity HIGH,CRITICAL --ignore-unfixed \
+			--exit-code 1 --no-progress "$$image" || failed="$$failed $$image"; \
+	done; \
+	[ -z "$$failed" ] || { echo "known holes with a fix out in:$$failed"; exit 1; }
 
 db-up:
 	docker compose up -d --wait

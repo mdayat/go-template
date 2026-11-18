@@ -7,6 +7,17 @@
 // a handler accepts a payload without the newest ones.
 package jobs
 
-// Queue is the queue every job goes to and the worker reads. A job that needs its own (urgent
-// work that mustn't wait behind slow jobs) gets a constant here, and the worker reads both.
+import "github.com/mdayat/go-template/internal/queue"
+
+// Queue is the queue a job goes to unless it needs its own.
 const Queue = "default"
+
+// Queues are every queue and how many of its jobs a worker instance runs at once, unless
+// WORKER_QUEUES says otherwise. A job that mustn't wait behind others (urgent work), or would hold
+// up others (slow work, like calling an AI model), gets its own queue: a constant like Queue, and a
+// line here.
+func Queues() []queue.Limit {
+	return []queue.Limit{
+		{Queue: Queue, Concurrency: 10},
+	}
+}

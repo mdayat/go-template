@@ -19,7 +19,7 @@ import (
 	"github.com/mdayat/go-template/internal/testenv"
 )
 
-var testLimits = DBLimits{Statement: 10 * time.Second, IdleInTransaction: 10 * time.Second}
+var testLimits = DBLimits{MaxConns: 4, Statement: 10 * time.Second, IdleInTransaction: 10 * time.Second}
 
 // A query's time is recorded under its sqlc name, never its SQL, and the pool's use is recorded too.
 func TestConnectDBRecordsMetrics(t *testing.T) {
@@ -149,19 +149,22 @@ func TestConnectDBStopsCancelledQueries(t *testing.T) {
 	}
 }
 
-// Every connection has the limits, and Postgres enforces them.
-func TestConnectDBSetsTimeLimits(t *testing.T) {
+// The pool has its size, and every connection the time limits, which Postgres enforces.
+func TestConnectDBSetsLimits(t *testing.T) {
 	t.Parallel()
 	url, err := testenv.Get("TEST_DATABASE_URL")
 	if err != nil {
 		t.Fatal(err)
 	}
-	limits := DBLimits{Statement: 300 * time.Millisecond, IdleInTransaction: 250 * time.Millisecond}
+	limits := DBLimits{MaxConns: 3, Statement: 300 * time.Millisecond, IdleInTransaction: 250 * time.Millisecond}
 	pool, err := ConnectDB(t.Context(), url, limits, noop.NewMeterProvider(), tracenoop.NewTracerProvider())
 	if err != nil {
 		t.Fatalf("ConnectDB() error = %v", err)
 	}
 	t.Cleanup(pool.Close)
+	if got := pool.Config().MaxConns; got != 3 {
+		t.Errorf("pool size = %d, want DBLimits.MaxConns, 3", got)
+	}
 
 	var statement, idle string
 	err = pool.QueryRow(t.Context(),
@@ -193,7 +196,7 @@ func TestConnectDBSetsTimeLimits(t *testing.T) {
 
 // A limit set in the URL too would leave one of the two values silently ignored; 0 would be none,
 // and Postgres refuses one too long.
-func TestConnectDBRefusesOtherTimeLimits(t *testing.T) {
+func TestConnectDBRefusesOtherLimits(t *testing.T) {
 	t.Parallel()
 	url, err := testenv.Get("TEST_DATABASE_URL")
 	if err != nil {
@@ -220,9 +223,13 @@ func TestConnectDBRefusesOtherTimeLimits(t *testing.T) {
 		{"statement_timeout in another case", with("Statement_Timeout", "1000"), testLimits, "DB_STATEMENT_TIMEOUT"},
 		{"statement_timeout in options", with("options", "-c statement_timeout=1000"), testLimits, "DB_STATEMENT_TIMEOUT"},
 		{"statement-timeout in options", with("options", "--Statement-Timeout=1000"), testLimits, "DB_STATEMENT_TIMEOUT"},
-		{"no statement limit", url, DBLimits{IdleInTransaction: time.Second}, "DB_STATEMENT_TIMEOUT"},
-		{"no idle limit", url, DBLimits{Statement: time.Second}, "DB_IDLE_IN_TRANSACTION_TIMEOUT"},
-		{"too long a limit", url, DBLimits{Statement: time.Second, IdleInTransaction: 600 * time.Hour}, "DB_IDLE_IN_TRANSACTION_TIMEOUT"},
+		{"no statement limit", url, DBLimits{MaxConns: 4, IdleInTransaction: time.Second}, "DB_STATEMENT_TIMEOUT"},
+		{"no idle limit", url, DBLimits{MaxConns: 4, Statement: time.Second}, "DB_IDLE_IN_TRANSACTION_TIMEOUT"},
+		{"too long a limit", url, DBLimits{MaxConns: 4, Statement: time.Second, IdleInTransaction: 600 * time.Hour}, "DB_IDLE_IN_TRANSACTION_TIMEOUT"},
+		{"pool size in the URL", with("pool_max_conns", "5"), testLimits, "DB_MAX_CONNS"},
+		{"pool size in the URL, another case", with("Pool_Max_Conns", "5"), testLimits, "DB_MAX_CONNS"},
+		{"no pool size", url, DBLimits{Statement: time.Second, IdleInTransaction: time.Second}, "DB_MAX_CONNS"},
+		{"too large a pool", url, DBLimits{MaxConns: 1001, Statement: time.Second, IdleInTransaction: time.Second}, "DB_MAX_CONNS"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -241,3 +248,43 @@ func TestConnectDBRefusesOtherTimeLimits(t *testing.T) {
 		})
 	}
 }
+
+// remove:api
+// With every connection busy the database is still up: the readiness check passes, or every
+// instance would be dropped at once.
+func TestDBReadyCountsAFullPoolAsReady(t *testing.T) {
+	t.Parallel()
+	url, err := testenv.Get("TEST_DATABASE_URL")
+	if err != nil {
+		t.Fatal(err)
+	}
+	limits := testLimits
+	limits.MaxConns = 1
+	pool, err := ConnectDB(t.Context(), url, limits, noop.NewMeterProvider(), tracenoop.NewTracerProvider())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	check := DBReady(pool)
+
+	if err := check(t.Context()); err != nil {
+		t.Errorf("check with a free connection = %v, want nil", err)
+	}
+	conn, err := pool.Acquire(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+	defer cancel()
+	if err := check(ctx); err != nil {
+		t.Errorf("check with every connection busy = %v, want nil", err)
+	}
+	conn.Release()
+
+	pool.Close()
+	if err := check(t.Context()); err == nil {
+		t.Error("check with the pool closed = nil, want an error")
+	}
+}
+
+// remove:end

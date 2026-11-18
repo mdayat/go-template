@@ -22,7 +22,7 @@ func TestLoadSettings(t *testing.T) {
 	want := settings{
 		app:         config.App{Env: config.EnvProduction, LogLevel: zerolog.InfoLevel},
 		databaseURL: "postgres://localhost/app",
-		dbLimits:    startup.DBLimits{Statement: time.Minute, IdleInTransaction: time.Minute},
+		dbLimits:    startup.DBLimits{MaxConns: 2, Statement: time.Minute, IdleInTransaction: time.Minute},
 	}
 	if got != want {
 		t.Errorf("loadSettings() = %+v, want %+v", got, want)
@@ -31,11 +31,11 @@ func TestLoadSettings(t *testing.T) {
 
 func TestLoadSettingsNamesEveryMissingOrInvalidSetting(t *testing.T) {
 	t.Parallel()
-	_, err := loadSettings(config.Map{"DB_STATEMENT_TIMEOUT": "0"})
+	_, err := loadSettings(config.Map{"DB_STATEMENT_TIMEOUT": "0", "DB_MAX_CONNS": "0"})
 	if err == nil {
-		t.Fatal("loadSettings() error = nil, want one naming DATABASE_URL and DB_STATEMENT_TIMEOUT")
+		t.Fatal("loadSettings() error = nil, want one naming DATABASE_URL, DB_STATEMENT_TIMEOUT and DB_MAX_CONNS")
 	}
-	for _, name := range []string{"DATABASE_URL", "DB_STATEMENT_TIMEOUT"} {
+	for _, name := range []string{"DATABASE_URL", "DB_STATEMENT_TIMEOUT", "DB_MAX_CONNS"} {
 		if !strings.Contains(err.Error(), name) {
 			t.Errorf("loadSettings() error = %q, want it to name %s", err, name)
 		}

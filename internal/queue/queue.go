@@ -24,6 +24,14 @@ type Job struct {
 	MaxRetries int
 }
 
+// Limit is a queue the worker takes jobs from, and how many of its jobs one worker instance (one
+// running copy of the worker) runs at once. Each queue's limit is its own: slow jobs filling one
+// queue's slots don't hold up another's.
+type Limit struct {
+	Queue       string
+	Concurrency int
+}
+
 // Enqueuer puts jobs on the queue for the worker (cmd/worker).
 type Enqueuer interface {
 	// Enqueue queues job and returns its ID, for finding the run in the worker's logs.

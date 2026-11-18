@@ -43,6 +43,9 @@ func logJobs(logger zerolog.Logger, durations metric.Float64Histogram, tracer tr
 				))
 			defer span.End()
 			fields := logger.With().Str("job_type", run.Type).Str("job_id", run.ID)
+			if run.RequestID != "" {
+				fields = fields.Str("request_id", run.RequestID)
+			}
 			// Not when the span isn't being recorded: its IDs would be the queueing request's.
 			if sc := span.SpanContext(); span.IsRecording() {
 				fields = fields.Dict("trace", zerolog.Dict().Str("id", sc.TraceID().String())).

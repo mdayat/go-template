@@ -23,7 +23,7 @@ background ones (a job queue polls every second), and each would otherwise be a 
   [`TRUSTED_PROXIES`](http-api.md#rate-limits) finds it (else the connection's, as the request log
   has it). The connection's own address and port and the method as sent are there too: the client's
   IP and user agent are the only personal data a span holds, the same the request log keeps. A 5xx
-  or a reply cut off by a panic marks it failed. The health check isn't traced.
+  or a reply cut off by a panic marks it failed. The health and readiness checks aren't traced.
   - Every caller counts as outside: a trace a client sends (its `traceparent` header) is linked to
     the request's span, never continued, so no client can make us keep its requests or choose the
     trace IDs in our logs. Behind your own services that do send theirs, drop

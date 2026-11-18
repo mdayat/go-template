@@ -114,6 +114,30 @@ A deleted row is still in the table, so every rule below exists to keep it out o
 Soft delete keeps only a row's last state. To know who changed what and when, keep a separate
 history (audit) table.
 
+## Connections
+
+Each program keeps a pool of database connections (`startup.ConnectDB`) and opens at most
+`DB_MAX_CONNS`; a query waits for a free one. Each program sets its own default in `settings.go`:
+
+<!-- remove:api -->
+- **API**: 10.
+<!-- remove:end -->
+<!-- remove:worker -->
+- **worker**: the number of jobs it runs at once (`WORKER_QUEUES`, [worker.md](worker.md#queues)),
+  as each job uses one connection at a time; it refuses to start with fewer.
+<!-- remove:end -->
+- **oneoff**: 2.
+
+Postgres has its own limit on connections (`max_connections`, often 100; less on small managed
+databases). Every instance (one running copy of a program: 3 API containers are 3 instances) has a
+pool, so add up `DB_MAX_CONNS` times the instances, for every program, and keep the total below that
+limit, with room for migrations and your own `psql`. During a deploy old and new instances run side
+by side, so count those too. Postgres refuses connections past its limit, and requests then fail.
+
+Set it only through `DB_MAX_CONNS`: a program refuses to start if `DATABASE_URL` sets
+`pool_max_conns`. A pool waiting for connections shows in the `pgxpool` metrics
+([metrics.md](metrics.md)).
+
 ## Time limits
 
 When a request or job runs out of time, its context ends and pgx asks Postgres to stop the query.
