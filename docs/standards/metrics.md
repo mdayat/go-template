@@ -82,6 +82,181 @@ is `db_client_operation_duration_seconds_bucket`, `_count` and `_sum`. When push
 is the `job` label and `service.instance.id` the `instance` label; when pulled, those come from the
 scrape config.
 
+## What to alert on
+
+Alert on what users feel (errors, slowness, work that stopped), not on causes: a cause no one feels
+yet belongs on a dashboard. Below, each alert's PromQL (as Prometheus stores these metrics: dots
+become `_`, units a suffix), when to fire, and where to look next. The rules themselves live where
+your alerts are managed; copy these into them. The thresholds are a quiet start: after a week, set
+them from your own normal. **Urgent** means someone acts now; the rest can wait for working hours.
+
+`job` is each program's `service.name` (`<project>-<program>`) and `instance` its
+`service.instance.id`, as Prometheus names pushed metrics (OTLP); scope each rule to one environment
+too, adding `deployment_environment_name="production"` to its metrics, or test traffic dilutes
+production's. That label, like `service_version`, exists only if the store promotes the resource
+attribute (`promote_resource_attributes` in `local/prometheus.yml`); a stock Prometheus keeps both
+on `target_info` alone. With `OTEL_METRICS_EXPORTER=prometheus` (scraped), `instance` is the address
+scraped, the same after a restart: count copies by `service_instance_id` on `target_info` instead.
+
+Every program:
+
+- **Stopped sending metrics** (urgent): no runtime metrics for 10 minutes. It's down, or its
+  metrics don't arrive (its log warns once a minute when sending fails). A program that's down
+  sends nothing, so also check from outside, with an uptime check. One rule per program
+  (`<project>-<program>`).
+
+  ```promql
+  absent_over_time(go_memory_used_bytes{job="<project>-<program>"}[10m])
+  ```
+
+- **Restarting** (urgent): more than 2 copies came and went in 30 minutes. Each start is a new
+  `service.instance.id` (`instance`); a crash loop or out-of-memory kills shows as many. Its last
+  log lines say why. "Now" is the copies heard from in the last 3 minutes (each sends every
+  minute, `OTEL_METRIC_EXPORT_INTERVAL`): a stopped copy's numbers stay readable for 5. The `or`
+  counts none running as 0, so a loop with no copy up still fires. A rolling deploy replaces
+  every copy, and so does a planned stop or scale-down: keep the threshold above your number of
+  copies (two deploys in 30 minutes still fire it). A copy killed or crashed before its first send
+  (a minute) never shows, though one that exits sends what it has; the stopped-sending alert covers
+  the rest.
+
+  ```promql
+  count by (job) (count by (job, instance) (count_over_time(go_memory_used_bytes[30m])))
+    - (count by (job) (count by (job, instance) (count_over_time(go_memory_used_bytes[3m])))
+       or count by (job) (count by (job, instance) (count_over_time(go_memory_used_bytes[30m]))) * 0)
+    > 2
+  ```
+
+- **Memory near its limit**: above 90% of Go's limit for 15 minutes (no limit, no alert). Go is
+  collecting garbage hard, which costs CPU, and the next step is the container killing it: take a
+  heap profile ([below](#profiles)). Go's limit is itself a share of the container's
+  (`AUTOMEMLIMIT`, 0.9 by default), so this fires at about 81% of the container's memory.
+
+  ```promql
+  sum by (job, instance) (go_memory_used_bytes) / sum by (job, instance) (go_memory_limit_bytes) > 0.9
+  ```
+
+- **Waiting for database connections**: requests spend over 0.1 s a second, all together,
+  waiting for a free connection, for 10 minutes. Every connection is busy: slow queries hold
+  them, or the pool is too small for the traffic. Counted in time, not waits: many short waits
+  for a new connection to open cost no one anything.
+
+  ```promql
+  sum by (job) (rate(pgxpool_empty_acquire_wait_time_nanoseconds_total[5m])) / 1e9 > 0.1
+  ```
+
+- **Slow queries**: the slowest 5% take over 0.5 s for 10 minutes, with a query every 10 s (a
+  program that queries rarely, a daily job's, would otherwise fire on one long query). The dashboard's "Query time p95, by query" names the query; `EXPLAIN` it.
+
+  ```promql
+  histogram_quantile(0.95, sum by (le, job) (rate(db_client_operation_duration_seconds_bucket{pgx_operation_type="query"}[5m]))) > 0.5
+  and sum by (job) (rate(db_client_operation_duration_seconds_count{pgx_operation_type="query"}[5m])) > 0.1
+  ```
+
+- **Failing database calls**: over 5% fail for 10 minutes, with a call every 10 s. Every query
+  first takes a connection (`acquire`), so this is failed queries and failed takes per take: an
+  unreachable database shows as failed takes, not queries. Postgres is refusing or dropping them;
+  the program's error lines say which. A broken unique rule (a duplicate title) counts too, and
+  so does a query or wait cancelled because its client hung up (499), so a few are normal. A
+  transaction runs several queries on one take, so code that uses them can push the share above
+  1.
+
+  ```promql
+  sum by (job) (rate(db_client_operation_errors_total{pgx_operation_type=~"query|acquire"}[5m]))
+    / sum by (job) (rate(db_client_operation_duration_seconds_count{pgx_operation_type="acquire"}[5m])) > 0.05
+  and sum by (job) (rate(db_client_operation_duration_seconds_count{pgx_operation_type="acquire"}[5m])) > 0.1
+  ```
+<!-- remove:api -->
+
+The API:
+
+- **Server errors** (urgent): over 1% of requests get a 5xx, or a reply a panic cut off midway
+  (`error_type` `aborted`, recorded with the status already sent), for 5 minutes, while there's
+  traffic (a request every 10 s). The request log's error lines (`level` error) say what failed.
+
+  ```promql
+  sum by (job) (rate(http_server_request_duration_seconds_count{http_response_status_code=~"5.."}[5m])
+                or rate(http_server_request_duration_seconds_count{error_type="aborted"}[5m]))
+    / sum by (job) (rate(http_server_request_duration_seconds_count[5m])) > 0.01
+  and sum by (job) (rate(http_server_request_duration_seconds_count[5m])) > 0.1
+  ```
+
+- **Slow requests**: a route's slowest 5% take over 1 s for 10 minutes, with a request a
+  minute on it. Per route: one slow endpoint hides in the overall number. Its trace says where
+  the time goes ([tracing.md](tracing.md)).
+
+  ```promql
+  histogram_quantile(0.95, sum by (le, job, http_route) (rate(http_server_request_duration_seconds_bucket[5m]))) > 1
+  and sum by (job, http_route) (rate(http_server_request_duration_seconds_count[5m])) > 1/60
+  ```
+
+Watched on the dashboards, not alerted on: 4xx and 429 replies (a client's mistake, or one
+client sending too much), and traffic by route.
+<!-- remove:end -->
+<!-- remove:worker -->
+
+The worker:
+
+- **A job failed for good**: any job used its last retry in the last 15 minutes. Its
+  `job completed` line has the error; the job is gone from the queue. A count's series only
+  appears at its first event, already at 1, which `increase` can't see: the second half catches a
+  series that appeared in the window, such as the first failure since a restart, through
+  `last_over_time` even if that copy has stopped since.
+
+  ```promql
+  sum by (job, job_type) (increase(job_run_duration_seconds_count{job_result="failed"}[15m])) > 0
+  or count by (job, job_type) (last_over_time(job_run_duration_seconds_count{job_result="failed"}[15m])
+    unless job_run_duration_seconds_count{job_result="failed"} offset 15m)
+  ```
+
+- **Jobs retrying**: over 20% of runs end in a retry for 15 minutes, with a run every 10 s (one
+  retry of a rare job would be 100%; a rare job that keeps failing shows as failed for good).
+  Something they call is failing (the database, another service).
+
+  ```promql
+  sum by (job) (rate(job_run_duration_seconds_count{job_result="retrying"}[15m]))
+    / sum by (job) (rate(job_run_duration_seconds_count[15m])) > 0.2
+  and sum by (job) (rate(job_run_duration_seconds_count[15m])) > 0.1
+  ```
+
+- **The daily purge didn't succeed** in 25 hours (it runs at midnight UTC): deleted rows pile
+  up. Copy this for each job on a timetable, with a window a little longer than its interval. The
+  second half counts a first success since a restart, as above, kept by `last_over_time` after
+  the next deploy stops that copy; without it the alert fires after every deploy. `absent`
+  returns no labels: give the rule its `job` (and environment) as labels of its own. It needs 25
+  hours of stored data, and fires in a new environment until the first run.
+
+  ```promql
+  absent(
+    sum(increase(job_run_duration_seconds_count{job="<project>-worker", job_type="deleted_rows:purge", job_result="succeeded"}[25h])) > 0
+    or count(last_over_time(job_run_duration_seconds_count{job="<project>-worker", job_type="deleted_rows:purge", job_result="succeeded"}[25h])
+      unless job_run_duration_seconds_count{job="<project>-worker", job_type="deleted_rows:purge", job_result="succeeded"} offset 25h) > 0
+  )
+  ```
+
+Not covered: a worker that runs but takes no jobs (nothing measures how many wait in the queue;
+asynq's `Inspector` can, as a metric of your own), and a job that hangs (a run records nothing
+until it ends; its time limit ends it). The purge alert catches a stuck worker within a day.
+<!-- remove:end -->
+<!-- remove:valkey -->
+
+Valkey:
+
+- **Command errors** (urgent): over 5% of a client's commands fail for 5 minutes, with a command a
+  second. What that client (`pool_name`) is for stops working. `status` `nil` (a key that isn't
+  there) is normal, and so is one `NOSCRIPT` error per script after Valkey or a copy starts (each
+  script is loaded on its first use): too few to reach 5% of a busy client. A client that sends
+  few commands reads one error as a big share, so the minimum leaves it out: its failures show as
+  errors of whatever called it.
+
+  ```promql
+  sum by (job, pool_name) (rate(db_client_connections_use_time_milliseconds_count{status="error"}[5m]))
+    / sum by (job, pool_name) (rate(db_client_connections_use_time_milliseconds_count[5m])) > 0.05
+  and sum by (job, pool_name) (rate(db_client_connections_use_time_milliseconds_count[5m])) > 1
+  ```
+<!-- remove:end -->
+
+Watched on the dashboards, not alerted on: goroutine counts.
+
 ## Rules
 
 - **Never a personal or unbounded value in an attribute**: no user ID, raw path, IP, SQL or
