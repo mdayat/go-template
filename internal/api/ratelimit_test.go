@@ -50,9 +50,13 @@ type request struct {
 	remoteAddr, xff, token string
 }
 
+// limitedRoute is a signed-in GET route the limits apply to: the example's, so replace it when
+// replacing the example.
+const limitedRoute = "/web/tasks"
+
 func (rq request) send(t *testing.T, router http.Handler) *httptest.ResponseRecorder {
 	t.Helper()
-	return rq.sendTo(t, router, "/web/tasks")
+	return rq.sendTo(t, router, limitedRoute)
 }
 
 func (rq request) sendTo(t *testing.T, router http.Handler, target string) *httptest.ResponseRecorder {
@@ -160,7 +164,7 @@ func TestRateLimitPerIPReplacesTheChallenge(t *testing.T) {
 // sign-in don't count.
 func TestRateLimitPerUser(t *testing.T) {
 	t.Parallel()
-	router, _, issuer := testAPIWith(t, Limits{PerUser: 2, Limiter: valkeyLimiter(t)})
+	router, pool, issuer := testAPIWith(t, Limits{PerUser: 2, Limiter: valkeyLimiter(t)})
 	alice := request{remoteAddr: "192.0.2.1:1234", token: issuer.Token("alice")}
 	bob := request{remoteAddr: "192.0.2.1:1234", token: issuer.Token("bob")}
 
@@ -172,6 +176,12 @@ func TestRateLimitPerUser(t *testing.T) {
 	}
 	if got := bob.send(t, router).Code; got != http.StatusOK {
 		t.Errorf("bob's request = %d, want 200: users are counted apart", got)
+	}
+
+	// Counted before the user is read: a user past the limit costs no query.
+	pool.Close()
+	if got := alice.send(t, router).Code; got != http.StatusTooManyRequests {
+		t.Errorf("alice's request with the database closed = %d, want 429 before any query", got)
 	}
 }
 

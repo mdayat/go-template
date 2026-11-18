@@ -16,6 +16,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/mdayat/go-template/internal/api"
+	"github.com/mdayat/go-template/internal/api/handler"
 	"github.com/mdayat/go-template/internal/auth/jwks"
 	"github.com/mdayat/go-template/internal/config"
 	"github.com/mdayat/go-template/internal/db"
@@ -122,7 +123,12 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	// Every request's context comes from base, which ends when shutdown gives up waiting for running
+	// requests: a long endpoint's handler.Detach context ends with it too.
+	base, giveUp := context.WithCancel(context.Background())
+	defer giveUp()
 	server := &http.Server{
+		BaseContext:       func(net.Listener) context.Context { return handler.WithShutdown(base, base) },
 		Handler:           api.NewRouter(log.Logger, providers.Meters, providers.Tracers, services, authn, cfg.limits),
 		ErrorLog:          api.ServerErrorLog(log.Logger),
 		ReadHeaderTimeout: 5 * time.Second,
@@ -157,9 +163,10 @@ func run() error {
 
 	// The server stops first so no request is cut off mid-query; the deferred closes run after.
 	if err := server.Shutdown(shutdownCtx); err != nil {
-		// Requests still running: closing their connections cancels their contexts, which stops
-		// their queries and returns their connections. Otherwise the deferred pool.Close waits for
-		// them forever and the process never exits.
+		// Requests still running: ending base and closing their connections cancels their contexts
+		// (handler.Detach's too), which stops their queries and returns their connections.
+		// Otherwise the deferred pool.Close waits for them forever and the process never exits.
+		giveUp()
 		return errors.Join(fmt.Errorf("shut down http server: %w", err), server.Close())
 	}
 	if err := <-serveErr; !errors.Is(err, http.ErrServerClosed) {

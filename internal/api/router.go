@@ -81,8 +81,7 @@ func NewRouter(
 	// 429, 403) still carries its route ("/web/tasks/{id}") in logs, metrics and traces, and a path
 	// no route matches is a plain 404 that needs no sign-in, like any other.
 	signedIn := []func(http.Handler) http.Handler{
-		authenticate(authn, services.Users, signedOutLimit(limits.PerIP, limits.Limiter)),
-		limitPerUser(limits.PerUser, limits.Limiter),
+		authenticate(authn, services.Users, signedOutLimit(limits.PerIP, limits.Limiter), signedInLimit(limits.PerUser, limits.Limiter)),
 	}
 	router.Route("/mobile/v1", func(r chi.Router) {
 		r.Group(func(r chi.Router) {

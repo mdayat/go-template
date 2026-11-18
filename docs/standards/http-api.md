@@ -177,6 +177,8 @@ Every route but `/healthz` has two limits (`internal/api/ratelimit.go`):
   of 401s. Signed-in requests aren't counted per IP: many users can share one (a mobile carrier's,
   an office's). An IPv6 client is counted by its /64, which it usually holds whole.
 - **Per signed-in user** (`RATE_LIMIT_PER_USER`, default 120 a minute), wherever they send from.
+  Counted by the token's subject (hashed) once the token checks out, before the user is read, so a
+  user past it costs no query.
 
 0 turns a limit off. The defaults are common starting points, not a standard: set them from real
 traffic. A limit of N a minute lets a client send N at once, then refills evenly (one every 60/N
@@ -246,9 +248,9 @@ It's a background job ([worker.md](worker.md)).
 <!-- remove:end -->
 
 An endpoint that needs longer itself (a large upload) sets its own limits in that handler, not a
-higher limit for everyone:
-`context.WithTimeout(context.WithoutCancel(r.Context()), d)` (a context made from `r.Context()`
-alone can't outlive its 8 s; this one also no longer stops when the client leaves), and
-`http.ResponseController` for the write deadline. Its queries still stop at `DB_STATEMENT_TIMEOUT`:
-raise that in its transaction alone
-([database.md](database.md#time-limits)).
+higher limit for everyone: `ctx, cancel := handler.Detach(r, d)` for its work (a context made from
+`r.Context()` alone can't outlive its 8 s; this one also no longer stops when the client leaves,
+but still ends when shutdown gives up waiting, so it can't keep the program from exiting), and
+`http.ResponseController` for the read and write deadlines (`SetReadDeadline` for a slow body: the
+server's 10 s read limit would cut it). Its queries still stop at `DB_STATEMENT_TIMEOUT`: raise
+that in its transaction alone ([database.md](database.md#time-limits)).

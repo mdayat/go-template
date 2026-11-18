@@ -113,7 +113,8 @@ func signedIn(next http.Handler, token string) http.Handler {
 }
 
 // Helpers shared by every feature's endpoint tests live here, not in a feature's test file, so
-// removing one feature (the tasks example) can't break another's tests.
+// removing one feature (the tasks example) can't break another's tests. Two tests of the router
+// itself need real routes and use the example's: TestClientPrefixes and limitedRoute.
 
 // seedTime is when seeded rows were made: in the past, so a change made by a test moves updated_at.
 var seedTime = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)

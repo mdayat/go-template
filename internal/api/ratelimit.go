@@ -1,6 +1,8 @@
 package api
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"math"
 	"net/http"
@@ -120,21 +122,15 @@ func signedOutLimit(limit int, limiter ratelimit.Limiter) *rateLimit {
 	})
 }
 
-// limitPerUser refuses a signed-in user's requests past limit a minute. Only behind authenticate.
-func limitPerUser(limit int, limiter ratelimit.Limiter) func(http.Handler) http.Handler {
-	l := newRateLimit("user", limit, limiter, func(r *http.Request) string {
-		return handler.CurrentUser(r).ID.String()
+// signedInLimit counts each signed-in user's requests, by their token's subject: checked before
+// their user is read, so a user past the limit costs no query. The key is the subject's hash, so
+// the sign-in provider's ID for them isn't kept as it is, in the in-memory fallback either (the
+// Valkey limiter hashes its keys itself).
+func signedInLimit(limit int, limiter ratelimit.Limiter) *rateLimit {
+	return newRateLimit("user", limit, limiter, func(r *http.Request) string {
+		sum := sha256.Sum256([]byte(subjectFrom(r)))
+		return hex.EncodeToString(sum[:16])
 	})
-	return func(next http.Handler) http.Handler {
-		if l == nil {
-			return next
-		}
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if l.check(w, r) {
-				next.ServeHTTP(w, r)
-			}
-		})
-	}
 }
 
 // check counts r and sets X-RateLimit-Limit, -Remaining and -Reset (when the count is full again,
