@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 	"time"
 
@@ -76,6 +77,11 @@ func (e *Enqueuer) Enqueue(ctx context.Context, job queue.Job) (string, error) {
 // headers if it's being recorded: one that isn't is dropped (the run decides for itself instead of
 // being dropped with it), or isn't ours (a caller's trace, passed on while traces are off).
 func newTask(ctx context.Context, job queue.Job) (*asynq.Task, error) {
+	return newTaskWithHeaders(ctx, job, nil)
+}
+
+// newTaskWithHeaders is newTask with extra headers on the task (scheduledHeader).
+func newTaskWithHeaders(ctx context.Context, job queue.Job, extra map[string]string) (*asynq.Task, error) {
 	switch {
 	case strings.TrimSpace(job.Type) == "":
 		return nil, errors.New("a job needs a type")
@@ -89,6 +95,7 @@ func newTask(ctx context.Context, job queue.Job) (*asynq.Task, error) {
 		return nil, fmt.Errorf("job %s: max retries %d is negative", job.Type, job.MaxRetries)
 	}
 	headers := propagation.MapCarrier{}
+	maps.Copy(headers, extra)
 	if trace.SpanFromContext(ctx).IsRecording() {
 		traceHeaders.Inject(ctx, headers)
 	}

@@ -114,8 +114,9 @@ type Schedule struct {
 	// Spec is a cron spec in UTC ("0 3 * * *") or a shorthand ("@daily", "@every 1h").
 	Spec string
 	Job  Job
-	// Unique is how long, from the moment one copy is queued, other copies are dropped, in whole
-	// seconds. Every worker runs a scheduler, so without it each worker queues its own copy. Keep
-	// it shorter than the time between runs, or it drops the next run too.
+	// Unique is how long, from the moment one copy is queued or starts running, other copies are
+	// dropped, in whole seconds. Every worker runs a scheduler, so without it each worker queues and
+	// runs its own copy. Keep it well under the time between runs: a copy that waited in the queue
+	// starts its window late, and could drop the next run.
 	Unique time.Duration
 }

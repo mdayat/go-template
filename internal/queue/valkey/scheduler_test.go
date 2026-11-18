@@ -44,6 +44,10 @@ func TestSchedulersQueueEachJobOnce(t *testing.T) {
 
 	var got []queuedJob
 	for _, info := range pending {
+		// The server runs only the first copy in this time (claimSlot).
+		if w := info.Headers[scheduledHeader]; w != "3600" {
+			t.Errorf("queued job's %s = %q, want 3600: the schedule's Unique in seconds", scheduledHeader, w)
+		}
 		got = append(got, queuedJob{
 			Type: info.Type, Payload: string(info.Payload), Queue: info.Queue, Timeout: info.Timeout, MaxRetry: info.MaxRetry,
 		})

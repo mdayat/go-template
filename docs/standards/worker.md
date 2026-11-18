@@ -150,10 +150,16 @@ outbox, queues the jobs and deletes the rows it queued.
 Each schedule function (`purgeSchedules`) returns its jobs that run on a timetable, as
 `queue.Schedule`s with cron specs in UTC (`"@daily"`, `"0 3 * * *"`). Every worker process runs a
 scheduler, so with three workers each scheduled job is queued three times at the same moment;
-`Unique` (required) lets only the first through. Pick it shorter than the time between runs (an
-hour for a daily job, 30 minutes for an hourly one), or it blocks the next run too. A scheduled
-job still has to be safe to run twice: `Unique` stops duplicates only until the first copy
-succeeds or its time is up.
+`Unique` (required) lets only the first through. asynq lets go of it once that copy succeeds,
+which for a quick job can be before another worker's timer fires, so the server also runs only the
+first copy of a scheduled job in its `Unique` time and drops the rest (`claimSlot` in
+`internal/queue/valkey`, a key in Valkey per queue, job type and payload; a retry runs only if its
+copy still holds it, so a late retry can't take the next run's place; one dropped is logged at
+warn). The window starts when a copy starts running: pick `Unique` well under the time between
+runs (an hour for a daily job, 30 minutes for an hourly one), or a copy that waited in the queue
+blocks the next run. Two schedules of the same job and payload share one window. A scheduled job
+still has to be safe to run twice: past `Unique`, if Valkey loses the key, or while a deploy mixes
+old and new workers, a second copy runs.
 
 ## What any queue can do
 

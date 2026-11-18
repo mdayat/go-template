@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/hibiken/asynq"
@@ -19,8 +20,11 @@ type Scheduler struct {
 }
 
 // NewScheduler returns a scheduler that queues each schedule's job on its timetable. Every worker
-// process runs one, so each job is queued with its schedule's Unique: when several workers queue it
-// at the same moment, only the first gets through. asynq's own messages go to logger.
+// process runs one, so each job is queued with its schedule's Unique, which drops copies queued
+// while one is waiting or running. asynq lets go of it once a run succeeds, though, so a worker
+// whose timer fires a moment later queues a second copy: each scheduled job also carries its
+// Unique (scheduledHeader), and the server runs only the first copy in that time (claimSlot).
+// asynq's own messages go to logger.
 func NewScheduler(client *redis.Client, logger zerolog.Logger, schedules []queue.Schedule) (*Scheduler, error) {
 	tasks := make([]*asynq.Task, len(schedules))
 	for i, s := range schedules {
@@ -29,7 +33,9 @@ func NewScheduler(client *redis.Client, logger zerolog.Logger, schedules []queue
 			return nil, fmt.Errorf("schedule %s: unique %s is not a whole number of seconds", s.Job.Type, s.Unique)
 		}
 		// No trace to join: each run of a scheduled job starts its own.
-		task, err := newTask(context.Background(), s.Job)
+		task, err := newTaskWithHeaders(context.Background(), s.Job, map[string]string{
+			scheduledHeader: strconv.Itoa(int(s.Unique / time.Second)),
+		})
 		if err != nil {
 			return nil, fmt.Errorf("schedule %s: %w", s.Job.Type, err)
 		}

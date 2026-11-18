@@ -29,6 +29,7 @@ type ServerOptions struct {
 // Server takes jobs off the queues and runs them through a queue.Mux.
 type Server struct {
 	server *asynq.Server
+	client redis.UniversalClient
 	mux    *queue.Mux
 }
 
@@ -55,7 +56,8 @@ func NewServer(client redis.UniversalClient, mux *queue.Mux, opts ServerOptions)
 			ShutdownTimeout: opts.ShutdownTimeout,
 			Logger:          asynqLogger{logger: opts.Logger},
 		}),
-		mux: mux,
+		client: client,
+		mux:    mux,
 	}, nil
 }
 
@@ -84,6 +86,28 @@ func (s *Server) process(ctx context.Context, t *asynq.Task) error {
 		Attempt:     retried + 1,
 		MaxAttempts: maxRetry + 1,
 		WillRetry:   func(err error) bool { return willRetry(ctx, err, retried, maxRetry) },
+	}
+
+	if window, ok := scheduledWindow(t.Headers()); ok {
+		logger := zerolog.Ctx(ctx).With().Str("job_type", t.Type()).Str("job_id", id).Logger()
+		first, err := claimSlot(ctx, s.client, slot{queue: queueName, jobType: t.Type(), payload: t.Payload()}, id, window, retried > 0)
+		if err != nil {
+			// Before the mux, whose middleware logs every run: this one's line is here. asynq
+			// retries it.
+			logger.Error().Err(err).Msg("scheduled job not run")
+			return err
+		}
+		if !first {
+			// Another worker's scheduler queued this run too, and its copy came first. A retry (or a
+			// run from the archive, which keeps its retry count) dropped here is worth a warning:
+			// someone may be waiting for it.
+			level := zerolog.InfoLevel
+			if retried > 0 {
+				level = zerolog.WarnLevel
+			}
+			logger.WithLevel(level).Msg("scheduled job already ran in this time, so this copy didn't")
+			return nil
+		}
 	}
 
 	err := s.mux.Process(queue.WithRun(ctx, run), t.Type(), t.Payload())
