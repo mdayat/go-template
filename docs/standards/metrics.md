@@ -33,6 +33,10 @@ don't overwrite each other's numbers).
   numbers for every queue: take the highest (`max`), never the sum. asynq reads them with a script
   that runs Valkey's `MEMORY USAGE`: where a managed Valkey or the app's user is refused that
   command, each queue is left out with a warning in the log, and the alert below stays silent.
+- **Outbox** (worker; `outbox.RecordBacklog`), read from Postgres each time metrics are sent:
+  `outbox.jobs`, jobs waiting to be moved to the queue, and `outbox.oldest_wait` (seconds), how
+  long the oldest has waited, normally about a second. Every worker instance reports the same
+  numbers: take the highest.
 <!-- remove:end -->
 - **Database, from the program's side** ([otelpgx](https://github.com/exaring/otelpgx),
   `startup.ConnectDB`): `db.client.operation.duration` (seconds) per query, named by its sqlc name
@@ -248,6 +252,16 @@ The worker:
 
   ```promql
   max by (job, job_queue) (job_queue_oldest_wait_seconds) > 300
+  ```
+
+- **Outbox not moving** (urgent): its oldest job has waited over a minute, for 5 minutes. Queued
+  jobs aren't reaching the queue: Valkey is down or refusing them, or Postgres is failing the
+  relay (the worker's log says, once, "jobs aren't moving to the queue", with the error). Nothing
+  is lost; they go once it's fixed. Only workers send these numbers: with no worker running there
+  are none, and "Stopped sending metrics" fires instead.
+
+  ```promql
+  max by (job) (outbox_oldest_wait_seconds) > 60
   ```
 
 Not covered: a job that hangs (a run records nothing until it ends; its time limit ends it).

@@ -6,6 +6,9 @@ package queue
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"strings"
 	"time"
 )
 
@@ -22,6 +25,33 @@ type Job struct {
 	Timeout time.Duration
 	// MaxRetries is how many times a failed run is tried again; 0 runs it once.
 	MaxRetries int
+	// ID, if set, is the job's ID in the queue, so queueing it twice is refused with ErrDuplicate
+	// while the first is held (the outbox queues each job under its row's ID). Unset, the queue
+	// makes one up.
+	ID string
+	// RequestID is the ID of the API request that queued it, for its log lines (Run.RequestID).
+	// Unset, the queue takes it from the context, if a request's.
+	RequestID string
+}
+
+// ErrDuplicate is Enqueue's error for a job whose ID the queue still holds: it's queued already.
+var ErrDuplicate = errors.New("a job with this ID is queued already")
+
+// Check refuses what a queue would silently change or fail on later: no type, no queue, a time
+// limit that isn't a whole number of seconds (at least one), negative retries. Checked when
+// queueing, and before a job is kept anywhere to be queued later.
+func (j Job) Check() error {
+	switch {
+	case strings.TrimSpace(j.Type) == "":
+		return errors.New("a job needs a type")
+	case strings.TrimSpace(j.Queue) == "":
+		return fmt.Errorf("job %s: no queue", j.Type)
+	case j.Timeout < time.Second || j.Timeout%time.Second != 0:
+		return fmt.Errorf("job %s: timeout %s is not a whole number of seconds", j.Type, j.Timeout)
+	case j.MaxRetries < 0:
+		return fmt.Errorf("job %s: max retries %d is negative", j.Type, j.MaxRetries)
+	}
+	return nil
 }
 
 // Limit is a queue the worker takes jobs from, and how many of its jobs one worker instance (one

@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgconn"
+
+	"github.com/mdayat/go-template/internal/db"
 	"github.com/mdayat/go-template/internal/testdb"
 )
 
@@ -56,5 +59,100 @@ func TestRecognisesDatabaseErrors(t *testing.T) {
 	}
 	if IsUniqueViolation(duplicate, "other_key") {
 		t.Errorf("IsUniqueViolation(%v, other_key) = true, want false: another constraint's name", duplicate)
+	}
+}
+
+// InTx saves fn's statements together or not at all, and tries again only when Postgres says trying
+// again can succeed.
+func TestInTx(t *testing.T) {
+	t.Parallel()
+	pool := testdb.New(t)
+	ctx := t.Context()
+	// Through a generated query, as services write; users is a table every project keeps.
+	n := 0
+	insert := func(q *db.Queries) error {
+		n++
+		_, err := q.CreateUser(ctx, fmt.Sprintf("intx-%d", n))
+		return err
+	}
+	count := func() int {
+		var n int
+		if err := pool.QueryRow(ctx, "SELECT count(*) FROM users").Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+
+	failed := errors.New("second step failed")
+	err := InTx(ctx, pool, func(q *db.Queries) error {
+		if err := insert(q); err != nil {
+			return err
+		}
+		return failed
+	})
+	if !errors.Is(err, failed) || count() != 0 {
+		t.Errorf("a failed transaction = %v with %d rows saved, want its error and 0", err, count())
+	}
+
+	for _, tt := range []struct {
+		code      string
+		wantTries int
+	}{
+		{"40001", 3}, // serialization failure
+		{"40P01", 3}, // deadlock
+		{"23505", 1}, // unique violation: the same again
+	} {
+		tries := 0
+		err := InTx(ctx, pool, func(q *db.Queries) error {
+			tries++
+			if err := insert(q); err != nil {
+				return err
+			}
+			return fmt.Errorf("step: %w", &pgconn.PgError{Code: tt.code})
+		})
+		if err == nil || tries != tt.wantTries {
+			t.Errorf("code %s: tries = %d, error %v; want %d and the error", tt.code, tries, err, tt.wantTries)
+		}
+	}
+	if n := count(); n != 0 {
+		t.Errorf("rows after failed transactions = %d, want 0", n)
+	}
+
+	tries := 0
+	err = InTx(ctx, pool, func(q *db.Queries) error {
+		tries++
+		if err := insert(q); err != nil {
+			return err
+		}
+		if tries == 1 {
+			return &pgconn.PgError{Code: "40001"}
+		}
+		return nil
+	})
+	if err != nil || tries != 2 || count() != 1 {
+		t.Errorf("a transaction that succeeds on its second try = %v after %d tries, %d rows; want nil, 2, 1 (the first undone)", err, tries, count())
+	}
+}
+
+// A panic in fn rolls the transaction back, and goes on up.
+func TestInTxRollsBackOnPanic(t *testing.T) {
+	t.Parallel()
+	pool := testdb.New(t)
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Error("InTx swallowed fn's panic")
+			}
+		}()
+		_ = InTx(t.Context(), pool, func(q *db.Queries) error {
+			if _, err := q.CreateUser(t.Context(), "panicked"); err != nil {
+				return err
+			}
+			panic("boom")
+		})
+	}()
+	var n int
+	if err := pool.QueryRow(t.Context(), "SELECT count(*) FROM users").Scan(&n); err != nil || n != 0 {
+		t.Errorf("users after a panic = %d (%v), want 0", n, err)
 	}
 }

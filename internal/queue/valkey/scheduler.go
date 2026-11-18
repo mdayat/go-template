@@ -32,6 +32,11 @@ func NewScheduler(client *redis.Client, logger zerolog.Logger, schedules []queue
 		if s.Unique < time.Second || s.Unique%time.Second != 0 {
 			return nil, fmt.Errorf("schedule %s: unique %s is not a whole number of seconds", s.Job.Type, s.Unique)
 		}
+		// Every firing would carry them: a fixed ID refuses each run while the last is held, and no
+		// request queues a scheduled job.
+		if s.Job.ID != "" || s.Job.RequestID != "" {
+			return nil, fmt.Errorf("schedule %s: a scheduled job has no ID or request ID of its own", s.Job.Type)
+		}
 		// No trace to join: each run of a scheduled job starts its own.
 		task, err := newTaskWithHeaders(context.Background(), s.Job, map[string]string{
 			scheduledHeader: strconv.Itoa(int(s.Unique / time.Second)),

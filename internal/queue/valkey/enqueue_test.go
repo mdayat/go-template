@@ -2,6 +2,7 @@ package valkey
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -132,5 +133,26 @@ func TestEnqueueCarriesOnlyKeptTraces(t *testing.T) {
 	}
 	if got := traceparent(t.Context()); got != "" {
 		t.Errorf("no trace: traceparent = %q, want none", got)
+	}
+}
+
+// A job with an ID is queued under it, and once more is refused as a duplicate while the queue holds
+// it: the outbox relies on this so a job it queues twice runs once. Its own request ID is carried.
+func TestEnqueueWithAnID(t *testing.T) {
+	t.Parallel()
+	client := testredis.New(t)
+	queueName := testqueue.NewQueue(t, client)
+	enqueuer := NewEnqueuer(client, tracenoop.NewTracerProvider())
+	job := queue.Job{Type: "test:job", Queue: queueName, Timeout: time.Minute, ID: "job-" + queueName, RequestID: "req-1"}
+
+	id, err := enqueuer.Enqueue(t.Context(), job)
+	if err != nil || id != job.ID {
+		t.Fatalf("Enqueue() = %q, %v; want %q, nil", id, err, job.ID)
+	}
+	if _, err := enqueuer.Enqueue(t.Context(), job); !errors.Is(err, queue.ErrDuplicate) {
+		t.Errorf("Enqueue() again = %v, want queue.ErrDuplicate", err)
+	}
+	if info := testqueue.Take(t, client, queueName, id); info.Headers[requestIDHeader] != "req-1" {
+		t.Errorf("queued request ID = %q, want req-1", info.Headers[requestIDHeader])
 	}
 }

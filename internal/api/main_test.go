@@ -21,7 +21,7 @@ import (
 	"github.com/mdayat/go-template/internal/db"
 	"github.com/mdayat/go-template/internal/httpclient"
 	idempotencyvalkey "github.com/mdayat/go-template/internal/idempotency/valkey"
-	"github.com/mdayat/go-template/internal/queue/valkey"
+	"github.com/mdayat/go-template/internal/outbox"
 	"github.com/mdayat/go-template/internal/testdb"
 	"github.com/mdayat/go-template/internal/testredis"
 )
@@ -58,7 +58,7 @@ func testAPIFor(t *testing.T, limits Limits, allowedOrigins []string) (http.Hand
 		db.New(pool),
 		testReplies(t),
 		// remove:worker
-		valkey.NewEnqueuer(testredis.New(t), tracenoop.NewTracerProvider()), // the test job queue
+		outbox.NewEnqueuer(db.New(pool)), // jobs wait in the test database's outbox
 		// remove:end
 	)
 	authn, issuer := testAuthenticator(t)

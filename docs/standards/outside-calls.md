@@ -79,8 +79,8 @@ A 429's `Retry-After` isn't honoured yet: the job is retried with the queue's ow
 
 A report whose job runs out of tries is lost: the purge has already happened, and the job fails
 for good. That's fine for the purge, since the next day's report says the same thing; work whose
-report must arrive (a payment's receipt) writes it to an outbox table in the same transaction and
-sends it from a job of its own ([worker.md](worker.md)).
+report must arrive (a payment's receipt) queues a job of its own to send it, through the outbox in
+the same transaction as the work ([worker.md](worker.md#queueing-through-the-outbox)).
 
 <!-- remove:end -->
 ## Every call may happen twice

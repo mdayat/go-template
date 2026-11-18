@@ -29,7 +29,7 @@ func TestLoadSettings(t *testing.T) {
 	want := settings{
 		app:         config.App{Env: config.EnvProduction, LogLevel: zerolog.InfoLevel},
 		databaseURL: "postgres://localhost/app",
-		dbLimits:    startup.DBLimits{MaxConns: 10, Statement: 5 * time.Minute, IdleInTransaction: time.Minute},
+		dbLimits:    startup.DBLimits{MaxConns: 12, Statement: 5 * time.Minute, IdleInTransaction: time.Minute},
 		redisURL:    "redis://localhost:6379/0",
 		queues:      jobs.Queues(),
 
@@ -47,15 +47,15 @@ func TestLoadSettings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadSettings() error = %v", err)
 	}
-	if want := []queue.Limit{{Queue: "default", Concurrency: 3}}; !cmp.Equal(got.queues, want) || got.dbLimits.MaxConns != 3 {
-		t.Errorf("WORKER_QUEUES=default=3: queues = %v, DB_MAX_CONNS = %d; want %v, 3", got.queues, got.dbLimits.MaxConns, want)
+	if want := []queue.Limit{{Queue: "default", Concurrency: 3}}; !cmp.Equal(got.queues, want) || got.dbLimits.MaxConns != 5 {
+		t.Errorf("WORKER_QUEUES=default=3: queues = %v, DB_MAX_CONNS = %d; want %v, 5 (3 jobs and the outbox's 2)", got.queues, got.dbLimits.MaxConns, want)
 	}
 }
 
-// Fewer connections than jobs running at once would leave jobs waiting for one.
+// Fewer connections than jobs running at once and the outbox's two would leave some waiting for one.
 func TestLoadSettingsRefusesTooFewConnections(t *testing.T) {
 	t.Parallel()
-	_, err := loadSettings(config.Map{"DATABASE_URL": "x", "REDIS_URL": "y", "WORKER_QUEUES": "default=3", "DB_MAX_CONNS": "2"})
+	_, err := loadSettings(config.Map{"DATABASE_URL": "x", "REDIS_URL": "y", "WORKER_QUEUES": "default=3", "DB_MAX_CONNS": "4"})
 	if err == nil || !strings.Contains(err.Error(), "DB_MAX_CONNS") {
 		t.Errorf("loadSettings() error = %v, want one naming DB_MAX_CONNS", err)
 	}
@@ -110,6 +110,18 @@ func TestLoadSettingsNamesEveryMissingOrInvalidSetting(t *testing.T) {
 	for _, name := range []string{"DATABASE_URL", "REDIS_URL", "PURGE_WEBHOOK_URL", "DB_STATEMENT_TIMEOUT", "PPROF_ADDR"} {
 		if !strings.Contains(err.Error(), name) {
 			t.Errorf("loadSettings() error = %q, want it to name %s", err, name)
+		}
+	}
+}
+
+// The outbox's relay keeps a transaction open while it queues a batch: a shorter idle limit would
+// end it, and its jobs would be queued again.
+func TestLoadSettingsRefusesAShortIdleLimit(t *testing.T) {
+	t.Parallel()
+	for value, ok := range map[string]bool{"20s": true, "19s": false} {
+		_, err := loadSettings(config.Map{"DATABASE_URL": "x", "REDIS_URL": "y", "DB_IDLE_IN_TRANSACTION_TIMEOUT": value})
+		if (err == nil) != ok {
+			t.Errorf("DB_IDLE_IN_TRANSACTION_TIMEOUT=%s: loadSettings() error = %v, want ok = %v", value, err, ok)
 		}
 	}
 }

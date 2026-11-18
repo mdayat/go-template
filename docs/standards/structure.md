@@ -17,7 +17,7 @@ module can import. Inside `internal/`, these rules are ours:
 - **Each entry point has a file per feature**, in the entry point's package, not in the feature's:
   removing a whole entry point then takes its files and leaves the features whole.
 - **A library sits behind our own package** when it may be replaced (`internal/json` for JSON,
-  `internal/postgres` for database errors); lint refuses the library anywhere else.
+  `internal/postgres` for database errors and transactions); lint refuses the library anywhere else.
 - **Shared code isn't put in one feature's files**: removing that feature would break the rest. Test
   helpers go in a package's `main_test.go`; other shared code in a package of its own
   (`internal/testdb`, which every database test uses).

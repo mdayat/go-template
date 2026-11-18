@@ -22,8 +22,9 @@ const readyPath = "/readyz"
 const readyTimeout = time.Second
 
 // Readiness is what /readyz answers: ready while its check (a database ping) passes, until Drain.
-// Valkey isn't checked: the API works without it (rate limits count in memory, and only queueing a
-// job fails), so taking every instance out when it's down would make things worse.
+// Valkey isn't checked: the API works without it (rate limits count in memory, and only requests
+// with an Idempotency-Key fail), so taking every instance out when it's down would make things
+// worse.
 type Readiness struct {
 	check    func(context.Context) error
 	logger   zerolog.Logger

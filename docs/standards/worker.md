@@ -47,7 +47,7 @@ the queues it lists. So slow jobs can run on instances of their own (`WORKER_QUE
 others take the rest. A queue no instance takes never runs its jobs: those queued to run now show
 as a growing wait ([metrics.md](metrics.md#what-to-alert-on)), but those waiting for a retry or
 a later time stay `retrying` or scheduled, as only an instance taking the queue moves them on.
-The worker opens as many database connections as it runs jobs at once
+The worker opens a database connection for each job it runs at once, and 2 for the outbox
 ([database.md](database.md#connections)).
 
 Removing a queue takes two deploys. Jobs already in it stay there, and once it's gone from
@@ -144,13 +144,49 @@ contexts cancelled, which stops their queries. They run again on the next worker
 A failed run carries `error.message` (and `error.stack_trace` for a panic) on the same line. Inside
 a handler, `zerolog.Ctx(ctx)` is the job's logger: lines logged through it carry `job_type` and
 `job_id`, and `trace.id` and `span.id` when the run's trace is kept: the run is a span, in the trace
-of the request that queued it ([tracing.md](tracing.md)). A job queued during a request also
-carries `request_id`, that request's ID, even when its trace isn't kept. Log on a line of your own
+of the code that queued it straight to the queue, or one of its own when queued through the outbox
+([tracing.md](tracing.md)). A job queued during a request carries `request_id`, that request's ID,
+either way. Log on a line of your own
 only what's worth finding later (`"deleted rows purged"` with each table's count), never the
 payload.
 
 asynq also logs its own events (starting, shutting down, "Retry exhausted for task", a job put
 back in the queue), marked `"source":"asynq"`. Alert on the `job completed` lines, not on those.
+
+## Queueing through the outbox
+
+Saving a row and queueing its job touch two stores, Postgres and Valkey, and either can fail
+after the other succeeded: the row saved and its job lost, or the job run for a row never saved.
+So jobs are queued through the database: `internal/outbox` writes a job to the `outbox` table,
+and the worker's relay (`outbox.Relay`, in every worker instance) moves each to the queue about
+every second, then deletes it.
+
+- Saving rows and queueing a job together: write both in one transaction, `outbox.Add(ctx, q, job)`
+  inside `postgres.InTx`. Both are saved, or neither is.
+- Only queueing: `outbox.Enqueuer`, a `queue.Enqueuer` that writes each job in a transaction of its
+  own.
+
+A job runs under its outbox row's ID, so the ID returned when queueing is the one in the worker's
+logs, and carries the `request_id` of the request that queued it; it starts a trace of its own.
+While Valkey is down, jobs wait in the outbox and go once it's back, so queueing doesn't fail with
+it. A job waits up to about a second before the queue has it: queue straight to Valkey
+(`valkey.Enqueuer`) only where that second matters more than both guarantees.
+
+The relay deletes a job only once the queue has it, and queues it under the row's ID, which the
+queue refuses a second time while it holds the job. A relay that dies between the two leaves the
+row, and the next try is refused as a duplicate: the job isn't queued twice. Once the queue has
+dropped the finished job it can't tell any more, so a job is still written to run twice safely
+([above](#every-job-can-run-twice)). Relays in several instances take different rows (`FOR UPDATE
+SKIP LOCKED`). Its metrics and alert: [metrics.md](metrics.md#what-to-alert-on). A row the queue
+would never take (written by other code, or before a check got stricter) is logged and dropped, so
+it can't block the rows behind it.
+
+Deploy the migration that adds the `outbox` table first, as always ([database.md](database.md)).
+Code that queues through the outbox needs a worker of the same release or newer to move its jobs:
+with an older one (the API deployed first, or the worker rolled back), jobs wait in the outbox,
+none lost, and the alert fires until the worker catches up. The worker needs 2 database connections
+besides its jobs' (`DB_MAX_CONNS` at least jobs + 2) and `DB_IDLE_IN_TRANSACTION_TIMEOUT` of at
+least 20 s, as a relay batch's transaction waits while it queues; it refuses to start otherwise.
 
 <!-- remove:api -->
 ## Queueing from the API
@@ -160,13 +196,9 @@ the caller can find it in the worker's logs. Check the input before queueing (th
 check the job runs, or a read that the row exists), so the caller gets a 422 or 404 now instead of
 the job failing later where nobody sees it.
 
-Handlers queue through `queue.Enqueuer` (`Services.Jobs`), which `cmd/api` passes in.
-
-**An endpoint either queues a job or writes rows, not both.** Writing a row and then queueing can
-half-fail: the row is saved, the queue is down, the job is lost; the other order runs the job for
-a row that was never saved. When you need both (save an order, then email it), use an **outbox**:
-in the same transaction as the row, insert a row into an `outbox` table; a scheduled job reads the
-outbox, queues the jobs and deletes the rows it queued.
+Handlers queue through `queue.Enqueuer` (`Services.Jobs`), which `cmd/api` sets to the outbox's,
+so the API connects to the database only, never to the queue. A service that saves rows and queues
+a job adds the job in its own transaction instead ([above](#queueing-through-the-outbox)).
 
 <!-- remove:end -->
 ## Scheduled jobs
@@ -217,8 +249,9 @@ so no statement holds locks for long, and add an index that matches the conditio
   on a database of the test's own) with `mux.Process(ctx, jobType, payload)`, then checking the
   returned error **and the rows**. No Valkey needed.
 - An error that must not be retried is checked with `errors.Is(err, queue.ErrNoRetry)`.
-- Code that queues jobs is tested against a real Valkey (`internal/testqueue`), the job looked up by
-  its ID and checked, then deleted (`testqueue.Take`).
+- Code that queues through the outbox is checked by reading its row in the test database's `outbox`
+  table by ID; code that queues straight to Valkey against a real Valkey (`internal/testqueue`),
+  the job looked up by its ID and checked, then deleted (`testqueue.Take`).
 - A scheduled job is checked in the list `Schedules` returns (spec, job, `Unique`); `cmd/worker`'s
   test checks that the queue it runs on accepts every schedule.
 - The log line is checked for each kind of run (`TestLogJobs`), and on a real server for the runs

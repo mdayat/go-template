@@ -10,6 +10,17 @@ import (
 	"github.com/google/uuid"
 )
 
+type Outbox struct {
+	ID             uuid.UUID
+	JobType        string
+	Queue          string
+	Payload        []byte
+	TimeoutSeconds int32
+	MaxRetries     int32
+	RequestID      *string
+	CreatedAt      time.Time
+}
+
 type Task struct {
 	ID        uuid.UUID
 	Title     string

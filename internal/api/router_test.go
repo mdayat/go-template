@@ -16,9 +16,8 @@ import (
 
 	"github.com/mdayat/go-template/internal/api/handler"
 	"github.com/mdayat/go-template/internal/db"
-	"github.com/mdayat/go-template/internal/queue/valkey"
+	"github.com/mdayat/go-template/internal/outbox"
 	"github.com/mdayat/go-template/internal/testdb"
-	"github.com/mdayat/go-template/internal/testredis"
 )
 
 func TestHealthzAnswersGetAndHead(t *testing.T) {
@@ -69,7 +68,7 @@ func TestClientPrefixes(t *testing.T) {
 			db.New(pool),
 			testReplies(t),
 			// remove:worker
-			valkey.NewEnqueuer(testredis.New(t), tracenoop.NewTracerProvider()),
+			outbox.NewEnqueuer(db.New(pool)),
 			// remove:end
 		), NewReadiness(pool.Ping, zerolog.Nop()), authn, Limits{}, nil)
 	token := issuer.Token(testSubject)

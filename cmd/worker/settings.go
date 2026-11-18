@@ -42,8 +42,8 @@ func loadSettings(sources ...config.Source) (settings, error) {
 		// Statement: at least the longest job's Timeout (internal/jobs), so no job's statement is cut
 		// before its job is.
 		dbLimits: startup.DBLimits{
-			// A job uses one connection at a time: enough for every job running at once.
-			MaxConns:          r.Count("DB_MAX_CONNS", running),
+			// A job uses one connection at a time: one for every job running at once, and the spare.
+			MaxConns:          r.Count("DB_MAX_CONNS", running+spareConns),
 			Statement:         r.Duration("DB_STATEMENT_TIMEOUT", 5*time.Minute),
 			IdleInTransaction: r.Duration("DB_IDLE_IN_TRANSACTION_TIMEOUT", time.Minute),
 		},
@@ -57,6 +57,9 @@ func loadSettings(sources ...config.Source) (settings, error) {
 	// Only with queues read: without them the pool's default (their total) means nothing.
 	if queuesErr == nil {
 		err = errors.Join(err, checkMaxConns(s.dbLimits.MaxConns, running))
+	}
+	if s.dbLimits.IdleInTransaction < minIdleInTransaction {
+		err = errors.Join(err, fmt.Errorf("DB_IDLE_IN_TRANSACTION_TIMEOUT is %s; at least %s, as the outbox's relay keeps a transaction open while it queues a batch", s.dbLimits.IdleInTransaction, minIdleInTransaction))
 	}
 	if err != nil {
 		return settings{}, err
@@ -95,14 +98,23 @@ func readQueues(value string, known []queue.Limit) ([]queue.Limit, error) {
 	return queues, nil
 }
 
-// checkMaxConns refuses a pool smaller than the jobs running at once: the rest would wait for a
-// connection, and could run out their time limit waiting.
+// minIdleInTransaction is the shortest DB_IDLE_IN_TRANSACTION_TIMEOUT the worker takes: a relay
+// batch's transaction sits idle while it queues jobs, up to half its 30 s limit and one Valkey call.
+// Cut shorter, the batch's deletes are lost and its jobs queued again: a finished one runs twice.
+const minIdleInTransaction = 20 * time.Second
+
+// spareConns are the worker's connections besides its jobs': the outbox's relay holds one through
+// each batch, and its metrics take one each time they're sent.
+const spareConns = 2
+
+// checkMaxConns refuses a pool smaller than the jobs running at once and the spare: some would wait
+// for a connection, and could run out their time limit waiting.
 func checkMaxConns(maxConns, running int) error {
 	switch {
-	case running > startup.MaxDBConns:
-		return fmt.Errorf("the queues (jobs.Queues, or WORKER_QUEUES) run %d jobs at once; at most %d, as each needs a database connection", running, startup.MaxDBConns)
-	case maxConns < running:
-		return fmt.Errorf("DB_MAX_CONNS is %d, fewer than the %d jobs WORKER_QUEUES runs at once", maxConns, running)
+	case running+spareConns > startup.MaxDBConns:
+		return fmt.Errorf("the queues (jobs.Queues, or WORKER_QUEUES) run %d jobs at once; at most %d, as each needs a database connection", running, startup.MaxDBConns-spareConns)
+	case maxConns < running+spareConns:
+		return fmt.Errorf("DB_MAX_CONNS is %d, fewer than the %d jobs WORKER_QUEUES runs at once and %d for the outbox", maxConns, running, spareConns)
 	}
 	return startup.CheckMaxConns(maxConns)
 }

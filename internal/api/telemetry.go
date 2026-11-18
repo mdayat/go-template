@@ -21,9 +21,9 @@ import (
 
 // observeRequests records each request to meters and tracers, as OpenTelemetry's HTTP conventions
 // name them: its time (http.server.request.duration, by route, method and status) and a span
-// ("GET /web/tasks/{id}") that the request's queries, commands, outside calls and queued jobs hang
-// under. The span holds the route pattern as url.path, never the path itself, which can hold an
-// ID, an email or a token. The health and readiness checks aren't recorded: they're called every
+// ("GET /web/tasks/{id}") that the request's queries, commands and outside calls hang under (a job
+// queued through the outbox starts a trace of its own, carrying the request's ID). The span holds
+// the route pattern as url.path, never the path itself, which can hold an ID, an email or a token. The health and readiness checks aren't recorded: they're called every
 // few seconds. With both off it adds nothing: otelhttp costs a few microseconds a request even
 // recording nowhere.
 func observeRequests(meters metric.MeterProvider, tracers trace.TracerProvider) func(http.Handler) http.Handler {

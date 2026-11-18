@@ -58,6 +58,7 @@ jobs. Keep both, one or neither: see [Choose what you need](#choose-what-you-nee
 | `cmd/worker` | the job runner and scheduler, with [asynq](https://github.com/hibiken/asynq) on Valkey (Redis) |
 | `internal/queue` | what the code knows about the job queue (a job, queueing it, handling it, a timetable), with the asynq implementation on Valkey in `internal/queue/valkey` |
 | `internal/jobs` | each background job's name, payload and options, shared by every program that queues or runs it |
+| `internal/outbox` | queueing jobs through the database, in the same transaction as the rows they're about; the worker moves them to the queue |
 | `internal/worker` | job handlers, one JSON log line per job, retries, the schedule |
 | `internal/testqueue` | helpers for tests that queue jobs |
 | `docs/standards/worker.md` | [the rules for jobs](docs/standards/worker.md) |
@@ -243,8 +244,10 @@ git sees, so `git restore . && git clean -fd` undoes it.
 
 Each removal deletes the part's folders and the lines marked for it in shared files, then
 formats, tidies `go.mod`, builds, and checks that no file still mentions the part. Your own `.env`
-is never edited (git ignores it): delete the removed part's settings from it by hand. CI then
-checks only the shape you chose.
+is never edited (git ignores it): delete the removed part's settings from it by hand. Tables stay,
+as their migrations are history: without the worker the `outbox` table is unused; drop it with a
+migration of your own (`make migrate-diff`) once the change is deployed. CI then checks only the
+shape you chose.
 
 <!-- remove:end -->
 ## A program of your own

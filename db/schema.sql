@@ -47,3 +47,23 @@ CREATE INDEX tasks_owner_id_created_at_id_idx ON tasks (owner_id, created_at DES
 
 -- Serves an admin's list of everyone's tasks.
 CREATE INDEX tasks_created_at_id_idx ON tasks (created_at DESC, id DESC) WHERE deleted_at IS NULL;
+
+-- Jobs waiting to be queued. A job is written here in the same transaction as the rows it's about,
+-- so both are saved or neither is; the worker moves each to the job queue, under its id, and
+-- deletes it. Rows here are seconds old: older ones mean the queue can't take them. A project
+-- without a worker doesn't use it: drop it with a migration of its own.
+CREATE TABLE outbox (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  job_type text NOT NULL,
+  queue text NOT NULL,
+  payload bytea NOT NULL,
+  timeout_seconds integer NOT NULL,
+  max_retries integer NOT NULL,
+  -- The API request that queued it, for the job's log lines; NULL when no request did.
+  request_id text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT outbox_pkey PRIMARY KEY (id)
+);
+
+-- Serves taking the oldest jobs first.
+CREATE INDEX outbox_created_at_idx ON outbox (created_at);

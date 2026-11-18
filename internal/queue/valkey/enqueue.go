@@ -8,8 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"strings"
-	"time"
 
 	"github.com/hibiken/asynq"
 	"github.com/redis/go-redis/v9"
@@ -64,7 +62,11 @@ func (e *Enqueuer) Enqueue(ctx context.Context, job queue.Job) (string, error) {
 		return "", err
 	}
 	info, err := e.client.EnqueueContext(ctx, task)
-	if err != nil {
+	switch {
+	case errors.Is(err, asynq.ErrTaskIDConflict):
+		span.SetStatus(codes.Error, "queued already")
+		return "", fmt.Errorf("queue %s %s: %w", job.Type, job.ID, queue.ErrDuplicate)
+	case err != nil:
 		span.SetStatus(codes.Error, "not queued")
 		return "", fmt.Errorf("queue %s: %w", job.Type, err)
 	}
@@ -86,30 +88,26 @@ func newTask(ctx context.Context, job queue.Job) (*asynq.Task, error) {
 
 // newTaskWithHeaders is newTask with extra headers on the task (scheduledHeader).
 func newTaskWithHeaders(ctx context.Context, job queue.Job, extra map[string]string) (*asynq.Task, error) {
-	switch {
-	case strings.TrimSpace(job.Type) == "":
-		return nil, errors.New("a job needs a type")
-	case strings.TrimSpace(job.Queue) == "":
-		return nil, fmt.Errorf("job %s: no queue", job.Type)
 	// asynq keeps timeouts in whole seconds, cutting off the rest, and replaces a zero one with its
-	// 30-minute default.
-	case job.Timeout < time.Second || job.Timeout%time.Second != 0:
-		return nil, fmt.Errorf("job %s: timeout %s is not a whole number of seconds", job.Type, job.Timeout)
-	case job.MaxRetries < 0:
-		return nil, fmt.Errorf("job %s: max retries %d is negative", job.Type, job.MaxRetries)
+	// 30-minute default: Check refuses both.
+	if err := job.Check(); err != nil {
+		return nil, err
 	}
 	headers := propagation.MapCarrier{}
 	maps.Copy(headers, extra)
-	// Set by the API's request log on the request's context (hlog.RequestIDHandler).
-	if id, ok := hlog.IDFromCtx(ctx); ok {
+	// The job's own (a job the outbox queues later, outside the request), else the context's: set
+	// by the API's request log (hlog.RequestIDHandler).
+	if job.RequestID != "" {
+		headers[requestIDHeader] = job.RequestID
+	} else if id, ok := hlog.IDFromCtx(ctx); ok {
 		headers[requestIDHeader] = id.String()
 	}
 	if trace.SpanFromContext(ctx).IsRecording() {
 		traceHeaders.Inject(ctx, headers)
 	}
-	return asynq.NewTaskWithHeaders(job.Type, job.Payload, headers,
-		asynq.Queue(job.Queue),
-		asynq.Timeout(job.Timeout),
-		asynq.MaxRetry(job.MaxRetries),
-	), nil
+	opts := []asynq.Option{asynq.Queue(job.Queue), asynq.Timeout(job.Timeout), asynq.MaxRetry(job.MaxRetries)}
+	if job.ID != "" {
+		opts = append(opts, asynq.TaskID(job.ID))
+	}
+	return asynq.NewTaskWithHeaders(job.Type, job.Payload, headers, opts...), nil
 }

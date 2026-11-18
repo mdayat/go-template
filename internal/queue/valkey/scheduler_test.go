@@ -77,6 +77,8 @@ func TestNewSchedulerRefusesBadSchedules(t *testing.T) {
 		{"unique not in whole seconds", func(s *queue.Schedule) { s.Unique = 1500 * time.Millisecond }},
 		{"job without a queue", func(s *queue.Schedule) { s.Job.Queue = "" }},
 		{"spec that isn't one", func(s *queue.Schedule) { s.Spec = "every day" }},
+		{"job with an ID", func(s *queue.Schedule) { s.Job.ID = "fixed" }},
+		{"job with a request ID", func(s *queue.Schedule) { s.Job.RequestID = "req-1" }},
 	}
 	for _, tt := range tests {
 		schedule := valid

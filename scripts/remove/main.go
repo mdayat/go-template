@@ -35,11 +35,12 @@ func parts() map[string][]string {
 			"internal/auth", "internal/authtest", "scripts/devtoken", "internal/ratelimit", "internal/idempotency",
 			"local/grafana/dashboards/api.json",
 		},
-		// Without a worker nothing runs queued jobs, so the queue goes too: an endpoint would queue
-		// jobs that never run.
+		// Without a worker nothing runs queued jobs, so the queue goes too, with the outbox that feeds
+		// it: an endpoint would queue jobs that never run.
 		"worker": {
-			"cmd/worker", "internal/worker", "internal/jobs", "internal/queue", "internal/testqueue",
+			"cmd/worker", "internal/worker", "internal/jobs", "internal/queue", "internal/testqueue", "internal/outbox",
 			"docs/standards/worker.md", "internal/api/admin/purge.go", "internal/api/purge_test.go",
+			"db/queries/outbox.sql", "internal/db/outbox.sql.go",
 			"local/grafana/dashboards/worker.json",
 		},
 		// A project keeping both parts needs neither the markers nor this tool.
@@ -63,6 +64,7 @@ func mentions() map[string][]string {
 			"cmd/worker", "internal/worker", "internal/jobs", "internal/queue", "testqueue", "worker.md",
 			"testWorker", "run-worker", "PURGE_WEBHOOK_URL", "deleted-row-purges", "asynq",
 			"job.run.duration", "worker.json", "admin.Purges", "WORKER_QUEUES", "job.queue", "job_queue",
+			"internal/outbox", "outbox.Add", "outbox.jobs", "outbox_oldest_wait",
 		},
 	}
 }

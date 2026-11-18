@@ -124,7 +124,8 @@ Each program keeps a pool of database connections (`startup.ConnectDB`) and open
 <!-- remove:end -->
 <!-- remove:worker -->
 - **worker**: the number of jobs it runs at once (`WORKER_QUEUES`, [worker.md](worker.md#queues)),
-  as each job uses one connection at a time; it refuses to start with fewer.
+  as each job uses one connection at a time, and 2 for the outbox (its relay and metrics); it
+  refuses to start with fewer.
 <!-- remove:end -->
 - **oneoff**: 2.
 
@@ -189,34 +190,32 @@ already running.
 
 ## Transactions and retries
 
-A service that needs several statements to succeed or fail together runs them in one
-transaction, with sqlc's queries bound to it:
+A service that needs several statements to succeed or fail together runs them in one transaction,
+with `postgres.InTx` (`internal/postgres`): sqlc's queries bound to the transaction, committed if
+the function returns nil, rolled back otherwise.
 
 ```go
-// inTx runs fn in a transaction and retries it, at most 3 times in all, only when Postgres says
-// trying again can succeed: 40001 (serialization failure) and 40P01 (deadlock).
-func inTx(ctx context.Context, pool *pgxpool.Pool, fn func(q *db.Queries) error) error {
-	for attempt := 1; ; attempt++ {
-		err := pgx.BeginFunc(ctx, pool, func(tx pgx.Tx) error {
-			return fn(db.New(tx))
-		})
-		var pgErr *pgconn.PgError
-		retry := errors.As(err, &pgErr) && (pgErr.Code == "40001" || pgErr.Code == "40P01")
-		if !retry || attempt == 3 {
-			return err
-		}
+err := postgres.InTx(ctx, s.pool, func(q *db.Queries) error {
+	order, err := q.CreateOrder(ctx, params)
+	if err != nil {
+		return err
 	}
-}
+	return q.AddOrderLine(ctx, order.ID, line)
+})
 ```
 
-- Retry **only** these two codes. Any other error (a broken constraint, a lost connection, a bug)
-  fails the same way again, or worse, half-repeats work.
-- `fn` may run more than once, so it does nothing outside the database: no emails, no calls to
-  other services, no counters in memory. Do those after the transaction commits.
-- Postgres's default isolation (read committed) rarely raises 40001; use
-  `pgx.BeginTxFunc(ctx, pool, pgx.TxOptions{IsoLevel: pgx.Serializable}, ...)` when a transaction
-  reads data and decides based on it, and then the retry matters.
+- It tries again, 3 times in all, **only** when Postgres says trying again can succeed: 40001
+  (serialization failure) and 40P01 (deadlock). Any other error (a broken constraint, a lost
+  connection, a bug) fails the same way again, or worse, half-repeats work.
+- The function may run more than once, so it does nothing outside the database: no emails, no
+  calls to other services, no counters in memory. Do those after the transaction commits.
+<!-- remove:worker -->
+  A job is queued inside it through the outbox, which is in the database
+  ([worker.md](worker.md#queueing-through-the-outbox)).
+<!-- remove:end -->
+- Postgres's default isolation (read committed) rarely raises 40001; a transaction that reads data
+  and decides based on it needs `SERIALIZABLE`, and then the retry matters: add an `InTx` variant
+  taking `pgx.TxOptions` to `internal/postgres` with the first one.
 
-The template ships no such helper because its example needs only one statement per request; add it
-to `internal/postgres` with the first service that needs a transaction. Services don't import pgx
-(lint: depguard), so that package also gives them the pool's type, `type Pool = pgxpool.Pool`.
+A service that runs transactions holds the pool, as `*postgres.Pool`, beside its queries; services
+don't import pgx (lint: depguard).

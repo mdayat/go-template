@@ -17,12 +17,17 @@ import (
 	"github.com/mdayat/go-template/internal/db"
 	"github.com/mdayat/go-template/internal/httpclient"
 	"github.com/mdayat/go-template/internal/jobs"
+	"github.com/mdayat/go-template/internal/outbox"
 	"github.com/mdayat/go-template/internal/queue/valkey"
 	"github.com/mdayat/go-template/internal/startup"
 	"github.com/mdayat/go-template/internal/telemetry"
 	"github.com/mdayat/go-template/internal/webhook"
 	"github.com/mdayat/go-template/internal/worker"
 )
+
+// relayRedisTimeout is how long the outbox's relay waits for one Valkey call before stopping its
+// batch, to try again a second later.
+const relayRedisTimeout = 2 * time.Second
 
 // buildVersion is set at build time with -ldflags "-X main.buildVersion=...", for builds that can't
 // see .git (the Docker build).
@@ -97,6 +102,13 @@ func run() error {
 		return err
 	}
 	defer redisClient.Close()
+	// The outbox relay's own client, quick to give up: a slow Valkey mustn't hold its batch's
+	// transaction (and its rows' locks) open.
+	relayClient, err := startup.RedisFailFast(cfg.redisURL, relayRedisTimeout, "outbox", providers.Meters, providers.Tracers)
+	if err != nil {
+		return err
+	}
+	defer relayClient.Close()
 
 	schedules, err := worker.Schedules()
 	if err != nil {
@@ -136,6 +148,12 @@ func run() error {
 	}
 	// Before queueStats closes (deferred earlier, so run later).
 	defer stopRecording()
+	stopBacklog, err := outbox.RecordBacklog(pool, providers.Meters, log.Logger)
+	if err != nil {
+		return err
+	}
+	// Before the pool closes, likewise.
+	defer stopBacklog()
 	if err := server.Start(); err != nil {
 		return fmt.Errorf("start job server: %w", err)
 	}
@@ -143,6 +161,12 @@ func run() error {
 		server.Shutdown()
 		return fmt.Errorf("start scheduler: %w", err)
 	}
+	// Moves jobs the API and services queued through the outbox (in the database) to the queue.
+	relayDone := make(chan struct{})
+	go func() {
+		outbox.NewRelay(pool, valkey.NewEnqueuer(relayClient, providers.Tracers), log.Logger).Run(ctx)
+		close(relayDone)
+	}()
 	log.Info().Str("version", version).Msg("worker started")
 
 	<-ctx.Done()
@@ -153,6 +177,9 @@ func run() error {
 	// Waits up to its shutdown timeout for running jobs, and puts the unfinished ones back in the
 	// queue. Before the deferred closes: running jobs need the database until they end.
 	server.Shutdown()
+	// The relay stops with ctx, finishing its batch (at most relayTimeout, while the jobs above
+	// wind down); waited for, as it uses the database and its Valkey client.
+	<-relayDone
 	log.Info().Msg("worker stopped cleanly")
 	return nil
 }

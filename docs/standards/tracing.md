@@ -32,10 +32,11 @@ background ones (a job queue polls every second), and each would otherwise be a 
 <!-- remove:worker -->
 - **Each job** (worker): queueing it is a span (`send deleted_rows:purge`), and its trace goes with
   the job in its headers, never its payload (`internal/queue/valkey`). Each run is a span
-  (`process deleted_rows:purge`, `internal/worker/logging.go`) in that same trace, so a request and
-  the job it queued are one trace, retries included. A job on a timetable, or queued outside a kept
-  trace, starts its own. A failed run's span is marked failed, with the error's message (never its
-  stack).
+  (`process deleted_rows:purge`, `internal/worker/logging.go`) in that same trace, retries included.
+  A job queued through the outbox, as the API's are, is queued later by the worker's relay, outside
+  the request: its run starts a trace of its own, and its log lines carry the request's
+  `request_id` instead. So does a job on a timetable, or one queued outside a kept trace. A failed
+  run's span is marked failed, with the error's message (never its stack).
 <!-- remove:end -->
 - **Each query** ([otelpgx](https://github.com/exaring/otelpgx), `startup.ConnectDB`): named by
   its sqlc name (`query GetTask`; `prepare GetTask` the first time a connection runs it), with its

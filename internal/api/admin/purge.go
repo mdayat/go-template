@@ -34,8 +34,8 @@ type jobResponse struct {
 }
 
 // purge queues a job that removes for good, from every soft-deleted table, the rows deleted more
-// than older_than_days ago. It only queues: an endpoint that also wrote rows could save them and
-// then fail to queue the job.
+// than older_than_days ago. Jobs is the outbox (cmd/api): the job is saved in the database, and the
+// worker moves it to the queue.
 func (pr Purges) purge(w http.ResponseWriter, r *http.Request) error {
 	var req purgeRequest
 	if err := pr.Decoder.Decode(w, r, &req); err != nil {

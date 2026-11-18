@@ -22,7 +22,7 @@ import (
 	"github.com/mdayat/go-template/internal/db"
 	"github.com/mdayat/go-template/internal/httpclient"
 	idempotencyvalkey "github.com/mdayat/go-template/internal/idempotency/valkey"
-	"github.com/mdayat/go-template/internal/queue/valkey"
+	"github.com/mdayat/go-template/internal/outbox"
 	ratelimitvalkey "github.com/mdayat/go-template/internal/ratelimit/valkey"
 	"github.com/mdayat/go-template/internal/startup"
 	"github.com/mdayat/go-template/internal/telemetry"
@@ -117,19 +117,13 @@ func run() error {
 	}
 	defer repliesClient.Close()
 
-	// remove:worker
-	redisClient, err := startup.ConnectRedis(ctx, cfg.redisURL, "queue", providers.Meters, providers.Tracers)
-	if err != nil {
-		return err
-	}
-	defer redisClient.Close()
-
-	// remove:end
 	services := api.NewServices(
 		db.New(pool),
 		idempotencyvalkey.New(repliesClient, "api:", idempotencyTimeout),
 		// remove:worker
-		valkey.NewEnqueuer(redisClient, providers.Tracers),
+		// Jobs go through the outbox, in the database: the worker moves them to the queue, so the
+		// API needs no connection to it, and queues while it's down.
+		outbox.NewEnqueuer(db.New(pool)),
 		// remove:end
 	)
 	// Fetches the provider's keys now and hourly until ctx ends; a provider that can't be reached

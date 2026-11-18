@@ -143,7 +143,8 @@ outside `cmd/`.
 - Return an `apperr` kind for a failure a retry can't fix (it won't be retried); return `nil` when
   "not found" just means there's nothing left to do. Set `Timeout` on every job's `queue.Job`.
 - Check the input before queueing, so the caller hears about it now. An endpoint that queues a
-  job replies 202 with `job_id` and writes no rows (an outbox when it must do both).
+  job replies 202 with `job_id`. Jobs are queued through the outbox (`outbox.Enqueuer`), and a job
+  that goes with saved rows is added in the same transaction: `outbox.Add` in `postgres.InTx`.
 
 <!-- remove:end -->
 **Outside services** ([outside-calls.md](docs/standards/outside-calls.md))
@@ -180,7 +181,8 @@ outside `cmd/`.
 <!-- remove:end -->
 <!-- remove:worker -->
 - Job tests use `testWorker(t)` (the real handlers and services on a database of the test's own);
-  check the error **and** the rows. A queued job is checked with `testqueue.Take`.
+  check the error **and** the rows. A job queued through the outbox is checked in the test
+  database's `outbox` table by its ID; one queued straight to Valkey with `testqueue.Take`.
 <!-- remove:end -->
 - Don't mock our own code. Seed rows with SQL, not through the code under test.
 - `t.Parallel()`, table tests, `cmp.Diff(want, got)`. Don't assert on library error text.

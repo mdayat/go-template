@@ -58,10 +58,11 @@ and deletes them. Like `TEST_DATABASE_URL`, an unset or refused `TEST_REDIS_URL`
 <!-- remove:worker -->
 ## The job queue in tests
 
-A test that queues a job finds it by ID and deletes it: `testqueue.Take(t, testredis.New(t),
-jobs.Queue, id)`; one that runs a job server takes a queue of its own, `testqueue.NewQueue`. A
-worker running on your machine never picks up a test's job: it uses database 0. Job handlers
-themselves don't need Valkey; see [worker.md](worker.md#tests).
+A job queued through the outbox waits in the test database's `outbox` table: a test reads it there
+by the ID it got back. A job queued straight to Valkey is found by ID and deleted:
+`testqueue.Take(t, testredis.New(t), jobs.Queue, id)`; a test that runs a job server takes a queue
+of its own, `testqueue.NewQueue`. A worker running on your machine never picks up a test's job: it
+uses database 0. Job handlers themselves don't need Valkey; see [worker.md](worker.md#tests).
 
 <!-- remove:end -->
 ## Style
