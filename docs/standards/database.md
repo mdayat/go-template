@@ -47,16 +47,17 @@ rest:
 - A new column the new code fills (an owner, say) is empty on every row the old app writes during
   the deploy, and only the old app knew what belonged there. If those rows matter, first deploy
   code that writes the value into a column added earlier, then the code that relies on it.
-- Backfill rows with a one-off command ([commands.md](commands.md)), in batches, not with `UPDATE`
-  in a migration, which keeps every row it changes locked until the migration ends.
+- Fill existing rows (a backfill) with a one-off command ([commands.md](commands.md)), in batches,
+  not with `UPDATE` in a migration, which keeps every row it changes locked until the migration
+  ends.
 
 The template's own migrations build indexes and add keys the plain way: its table is small. Don't
 copy that to a big table; follow the steps above.
 
 `make migrate-check` reads each migration that commit `base` doesn't have (by default, where your
-branch left `origin/main`; `base=HEAD` checks the ones not committed yet).
-CI compares with the commit before the push, or a pull request's base. It reads SQL by its keywords,
-so it catches the common forms, not every one. It fails on:
+branch left `origin/main`; `base=HEAD` checks the ones not committed yet). CI compares with the
+commit before the push, or a pull request's base. It matches SQL keywords, so it catches the common
+forms, not every one. It fails on:
 
 - dropping a table, column, view, function, procedure, type, domain, schema or sequence, `TRUNCATE`,
   and any `RENAME`;
@@ -86,11 +87,12 @@ one): review whether the old app relies on it, such as a unique rule it matches 
 change that only widens a column (a longer `varchar`, `varchar` to `text`) doesn't rewrite the
 table: allow it.
 
-To keep one on purpose (a small table, a column nothing reads any more), put a line with the reason
-right above the statement, then run `make migrate-hash` (Atlas refuses a file edited after
-`atlas.sum` was written; do the same after adding `CONCURRENTLY` by hand). The line lets the whole
-statement through, and Atlas writes every change to a table as one `ALTER TABLE`: the check lists
-all it let through, so read the list, and split the statement if a part needs fixing instead.
+To keep a failing statement on purpose (a small table, a column nothing reads any more), put an
+`-- allow-risky:` line with the reason right above it, then run `make migrate-hash` (Atlas refuses
+a file edited after `atlas.sum` was written; do the same after adding `CONCURRENTLY` by hand). The
+line lets the whole statement through, and Atlas writes every change to a table as one
+`ALTER TABLE`: the check lists all it let through, so read the list, and split the statement if a
+part needs fixing instead.
 
 ```sql
 -- allow-risky: tasks holds a few hundred rows; the index builds at once
@@ -216,9 +218,10 @@ Every program reads the same two names, so each needs its own environment: one f
 would give every program one value (a short limit meant for one would cut another's long
 statements).
 
-A value is a duration (`500ms`, `10s`, `5m`) in whole milliseconds, from 1 ms to 596 hours: 0
-is no limit in Postgres. Set them only through these settings: a program refuses to start if
-`DATABASE_URL` or `PGOPTIONS` sets either, as one of the two values would be ignored.
+A value is a duration (`500ms`, `10s`, `5m`) in whole milliseconds, from 1 ms to 596 hours; 0
+(no limit, to Postgres) is refused. Set them only through these settings: a program refuses to
+start if `DATABASE_URL`, `PGOPTIONS` or a Postgres service file sets either, as one of the two
+values would be ignored.
 
 The values a program sends when it connects beat any set on the database or its user (`ALTER
 ROLE ... SET statement_timeout`): set them through these settings, not there. Behind a pooler
@@ -233,7 +236,15 @@ One transaction that needs longer raises the limit for itself alone, as its firs
 transaction; a plain `SET` would stay on the pooled connection for whoever uses it next.
 
 Migrations and your own `psql` sessions don't go through `ConnectDB`, so they have no limit. A
-migration may rightly run long (`CREATE INDEX CONCURRENTLY`). In a `psql` session on a shared
+migration may rightly run long (`CREATE INDEX CONCURRENTLY`), so it has no statement limit on
+purpose, but it should have a limit on waiting for a lock: add `options=-c%20lock_timeout%3D5s`
+to the migrate image's `DATABASE_URL` (after `&` if it already has a `?`), or, if migrations use a
+database user of their own, `ALTER ROLE <migration user> SET lock_timeout = '5s'` (not the app's
+user). A migration waiting for a table lock (behind a long query such as the daily purge) makes
+every read and write of that table queue behind it; if a deploy fails on the limit, run it again.
+A `CREATE INDEX CONCURRENTLY` blocks nothing while it waits, and a build cut off by the limit
+leaves an invalid index that makes the rerun fail ("already exists"): put `SET lock_timeout = 0;`
+before it in its file. In a `psql` session on a shared
 database, run `SET statement_timeout = '30s';` first: closing the terminal doesn't stop a query
 already running.
 

@@ -181,6 +181,55 @@ func TestLogRequests(t *testing.T) {
 	}
 }
 
+func TestLogRequestsCutsLongText(t *testing.T) {
+	t.Parallel()
+	router, logs := testRouter(t)
+
+	path := "/" + strings.Repeat("p", 100_000)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, path, nil)
+	// "é" is 2 bytes, so after the "a" the cut lands mid-letter, which is dropped.
+	req.Header.Set("User-Agent", "a"+strings.Repeat("é", 1000))
+	router.ServeHTTP(httptest.NewRecorder(), req)
+
+	var line struct {
+		URL struct {
+			Path string `json:"path"`
+		} `json:"url"`
+		UserAgent struct {
+			Original string `json:"original"`
+		} `json:"user_agent"`
+	}
+	if err := json.Unmarshal(logs.Bytes(), &line); err != nil {
+		t.Fatalf("parse log line: %v", err)
+	}
+	if want := path[:maxLoggedText] + "..."; line.URL.Path != want {
+		t.Errorf("logged path is %d bytes, want the first %d and ...", len(line.URL.Path), maxLoggedText)
+	}
+	if want := "a" + strings.Repeat("é", (maxLoggedText-1)/2) + "..."; line.UserAgent.Original != want {
+		t.Errorf("logged User-Agent = %q, want %d bytes of whole letters and ...", line.UserAgent.Original, maxLoggedText-1)
+	}
+}
+
+func TestTruncate(t *testing.T) {
+	t.Parallel()
+	notUTF8 := strings.Repeat("\x80", 600) // no byte starts a letter
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"short is kept", "abc", "abc"},
+		{"exactly the limit is kept", strings.Repeat("a", maxLoggedText), strings.Repeat("a", maxLoggedText)},
+		{"one past is cut", strings.Repeat("a", maxLoggedText+1), strings.Repeat("a", maxLoggedText) + "..."},
+		{"not UTF-8 steps back at most 3 bytes", notUTF8, notUTF8[:maxLoggedText-3] + "..."},
+	}
+	for _, tt := range tests {
+		if got := truncate(tt.in); got != tt.want {
+			t.Errorf("%s: truncate() = %d bytes, want %d", tt.name, len(got), len(tt.want))
+		}
+	}
+}
+
 func TestLogRequestsRequestID(t *testing.T) {
 	t.Parallel()
 	router, logs := testRouter(t)

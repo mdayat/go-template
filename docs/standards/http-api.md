@@ -7,8 +7,8 @@ live in the service ([errors.md](errors.md)), shared by every client. Where file
 ## Clients, paths and versions
 
 Each kind of client has its routes under its own prefix, in its own package, with its own request
-and reply types, all calling the same services. So one client's routes can change without any risk
-to another's: a field renamed for the web app can't break the mobile app.
+and reply types, all calling the same services. So one client's routes can change without risk to
+another's: a field renamed for the web app can't break the mobile app.
 
 | Client | Path | Package | May change |
 |---|---|---|---|
@@ -23,8 +23,8 @@ The template has the first three; add the others when a project needs them, as a
 handler in each package: two thin handlers calling one service, so each reply can change on its own.
 The error body (`handler.Problem`) is the one reply type every client shares.
 
-The mobile contract is more than `internal/api/mobile`. It's also everything a mobile request goes
-through, so change these only by adding too:
+What old mobile apps rely on is more than `internal/api/mobile`: it's everything a mobile request
+goes through, so change these only by adding too:
 
 - what every client's handlers share (`internal/api/handler`: the body decoder, error replies,
   paging);
@@ -44,8 +44,8 @@ versions ignore what they don't know. Never remove, rename or retype a field or 
 field means, or make an optional field required. A change that can't be made that way is a new
 version, `/mobile/v2/...`, in its own package (`internal/api/mobile/v2`), served beside v1 until no
 old version calls it. To see which do: apps send `User-Agent: <app>/<version>`
-(`myapp-ios/3.4.1`), and every request's log line has it as `user_agent.original`. The version is
-only in the mobile path; the web and admin apps change with the API.
+(`myapp-ios/3.4.1`), and every request's log line has it as `user_agent.original` (cut to 512
+bytes). The version is only in the mobile path; the web and admin apps change with the API.
 
 **Naming.**
 
@@ -112,10 +112,10 @@ Go's JSON reading (go-json and the standard library alike, with no setting to ch
 ```
 
 `detail` and `message` are for people; clients branch on `status` and the field's `rule`. Unknown
-paths get a 404 problem and wrong methods a 405 with an `Allow` header, signed in or not. Every GET route also
-answers HEAD (HTTP requires it; uptime checkers use it). An error reply drops any
-headers the handler had set that describe a body (`Content-Encoding`, `ETag`, ...), since they'd
-misdescribe the problem, and is never cached (`Cache-Control: no-store`).
+paths get a 404 problem and wrong methods a 405 with an `Allow` header, signed in or not. Every GET
+route also answers HEAD (HTTP requires it; uptime checkers use it). An error reply drops any headers
+the handler had set that describe a body (`Content-Encoding`, `ETag`, ...), since they'd misdescribe
+the problem, and is never cached (`Cache-Control: no-store`).
 
 ## Signing in
 
@@ -247,9 +247,10 @@ replay is a new request with the first one's reply, so its `X-Request-Id` is new
 included, in Valkey for the 24 hours.
 
 On a POST a key is 1 to 255 visible ASCII characters, or the request gets a 400; an empty header is
-no key. Other methods ignore it, and without it nothing changes. A keyed body is read whole first,
-to compare retries, so it has the JSON endpoints' 1 MB limit (checked before the `Content-Type`):
-an upload endpoint takes no key. Every try counts against the rate limits, replays too.
+no key. Other methods ignore it, and without it nothing changes. A request with a key has its body
+read whole first, to compare retries, so it has the JSON endpoints' 1 MB limit (checked before the
+`Content-Type`): an upload endpoint takes no key. Every try counts against the rate limits, replays
+too.
 
 Keys are kept in Valkey (`internal/idempotency/valkey`, 7.2 or later), so Valkey must not evict
 keys to free memory (`maxmemory-policy noeviction`): an evicted key runs its request again. While
@@ -257,12 +258,12 @@ Valkey can't be reached, a request with a key gets a 503 rather than run without
 asked for; one without a key is unaffected.
 
 A request holds its key for a minute while it runs; if the API dies mid-request the hold runs out
-and a retry runs again. (So can a claim whose answer Valkey lost: tries get the 409 "still running"
-for that minute.) An endpoint whose work outlives that (`handler.Detach`) needs a longer
-`idempotencyHold`. One gap remains: if the API dies after a request's work is saved but before its
-reply is kept, a retry runs it again. Where that would cost money, also save the key in the same
-database transaction as the work (a unique column on the row it creates), so the second run fails
-on the unique rule instead of saving twice.
+and a retry runs again. So does a hold Valkey took but whose answer never reached the API: until it
+runs out, tries get the 409 "still running". An endpoint whose work outlives that minute
+(`handler.Detach`) needs a longer `idempotencyHold`. One gap remains: if the API dies after a
+request's work is saved but before its reply is kept, a retry runs it again. Where that would cost
+money, also save the key in the same database transaction as the work (a unique column on the row
+it creates), so the second run fails on the unique rule instead of saving twice.
 
 ## Web pages on other sites (CORS)
 
@@ -280,9 +281,8 @@ site's gets the headers that let the browser go on, and the browser keeps that a
 hours. Every reply to an allowed site, errors included, says the page may read it, and which
 headers besides the basic ones: `Location`, `X-Request-Id`, `X-RateLimit-*`, `Retry-After` and
 `Idempotent-Replayed`. Pages may send `Authorization`, `Content-Type` and `Idempotency-Key`, with
-the methods the routes use; a page that
-sends another header (a browser tracing library's `traceparent`) fails its preflight until the
-header is added to `AllowedHeaders`.
+the methods the routes use; a page that sends another header (a browser tracing library's
+`traceparent`) fails its preflight until the header is added to `AllowedHeaders`.
 
 Each site is named, exactly as the browser sends it: a `*` anywhere is refused (rs/cors would read
 it as a wildcard), and so are `http://` in production (a page over plain http can be changed on its
@@ -306,15 +306,16 @@ argument, `readOrigins` in `cmd/api/settings.go`), remove the setting from `.exa
 
 - An ID that isn't a valid UUID is a 404, the same as an unknown one: it can't name anything.
 - Lists are paged with a cursor: `?limit=` (default 20, at most 100) and `?after=<next_cursor>`
-  from the previous page. `next_cursor` is missing on the last page. The cursor is opaque to
-  clients; inside, it's the last row's `(created_at, id)`, and the query uses an index on those.
+  from the previous page. `next_cursor` is missing on the last page. Clients pass the cursor back
+  unread; inside, it's the last row's `(created_at, id)`, and the query uses an index on those.
   Unlike `?page=3` (offset), a cursor doesn't skip or repeat rows when rows are added between pages,
   and it stays fast deep into a large table.
 
 ## Server settings
 
-Connection timeouts are set in `cmd/api/main.go` (read header 5 s, read 10 s, write 10 s, idle
-120 s). Those cut a slow connection but don't stop the handler, so each request's context also
+Connection limits are set in `cmd/api/main.go`: timeouts (read header 5 s, read 10 s, write 10 s,
+idle 120 s) and request headers at most 64 KB (Go's default is 1 MB; past it, Go replies a plain
+431 before our code runs, so it isn't logged or counted). The timeouts cut a slow connection but don't stop the handler, so each request's context also
 ends after 8 s (`RequestTimeout` in `internal/api/router.go`): its queries are cancelled and the
 caller gets a 503, "the request took too long". Pass `r.Context()` to everything a handler calls,
 or the time limit can't stop it.
@@ -322,18 +323,20 @@ or the time limit can't stop it.
 Two checks tell the platform about each instance (one running copy of the API). `/healthz` answers
 200 while the process runs: point the platform's restart check at it. `/readyz` answers 200 while
 the database answers within 1 s, else 503: point the load balancer's check at it, so it sends
-requests only to instances that can serve them. Valkey isn't checked: without it the API still
-serves (rate limits count in memory), and a check every instance fails would take them all out.
+requests only to instances that can serve them. If every database connection is still busy when
+the 1 s runs out, it answers 200: busy isn't down, and failing would drop every instance at once
+(`startup.DBReady`). Valkey isn't checked: without it the API still serves (rate limits count in
+memory), and a check every instance fails would take them all out.
 Neither needs a sign-in, is rate limited or is traced. A successful `/healthz` isn't logged, and
 `/readyz` logs only when its answer changes.
 
 On SIGTERM, `/readyz` answers 503 at once, and the API keeps serving for `SHUTDOWN_DELAY` (unset:
-none), long enough for the load balancer to notice and stop sending requests; otherwise the ones it
-sends meanwhile are refused. Then the server stops taking new requests and waits up to 8 s for
-running ones (`shutdownTimeout` in `cmd/api/main.go`): each request's context has ended by then.
-With no delay that's below Docker's default 10 s before a hard kill, the shortest common wait;
-with one, give the platform at least the delay plus 10 s. Any requests still running then have
-their connections closed, and the process exits.
+none; at most 1 minute), long enough for the load balancer to notice and stop sending requests;
+otherwise the ones it sends meanwhile are refused. Then the server stops taking new requests and
+waits up to 8 s for running ones (`shutdownTimeout` in `cmd/api/main.go`): each request's context
+has ended by then. With no delay that's below Docker's default 10 s before a hard kill, the
+shortest common wait; with one, give the platform at least the delay plus 10 s. Any requests still
+running then have their connections closed, and the process exits.
 
 Every reply carries `Cache-Control: no-store`, so a proxy or CDN in between never keeps one user's
 reply and hands it to another. A route whose reply is the same for everyone and may be cached sets

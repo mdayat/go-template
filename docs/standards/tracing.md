@@ -35,8 +35,8 @@ background ones (a job queue polls every second), and each would otherwise be a 
   (`process deleted_rows:purge`, `internal/worker/logging.go`) in that same trace, retries included.
   A job queued through the outbox, as the API's are, is queued later by the worker's relay, outside
   the request: its run starts a trace of its own, and its log lines carry the request's
-  `request_id` instead. So does a job on a timetable, or one queued outside a kept trace. A failed
-  run's span is marked failed, with the error's message (never its stack).
+  `request_id` instead. A job on a timetable, or one queued outside a kept trace, also starts its
+  own. A failed run's span is marked failed, with the error's message (never its stack).
 <!-- remove:end -->
 - **Each query** ([otelpgx](https://github.com/exaring/otelpgx), `startup.ConnectDB`): named by
   its sqlc name (`query GetTask`; `prepare GetTask` the first time a connection runs it), with its
@@ -50,8 +50,8 @@ background ones (a job queue polls every second), and each would otherwise be a 
 - **Each call to an outside service** (`internal/httpclient`): a span named by the method
   (`POST`), with the host, port and the reply's status; never the URL, which often holds a key.
   The trace isn't sent to the service: it isn't ours.
-- **Log lines** of a kept trace carry its `trace.id` and `span.id`: search the logs for a trace's
-  ID to find what it logged.
+- **Log lines** of a kept trace (one the sampler keeps, `OTEL_TRACES_SAMPLER_ARG` below) carry its
+  `trace.id` and `span.id`: search the logs for a trace's ID to find what it logged.
 
 ## Where they go
 
@@ -68,10 +68,10 @@ total that can be read any number of times. Finished spans wait in memory and go
 every few seconds; at most 2048 wait, and past that new ones are dropped rather than use more
 memory. On shutdown what's left is sent, within a second.
 
-`console` (traces printed among the log lines) and an `OTEL_TRACES_SAMPLER` other than
-`parentbased_traceidratio` or `parentbased_always_on` (what the sampler above is; any other would
-be ignored) stop the program at start, like any bad setting. A send that
-fails is logged at warn, at most once a minute, as for metrics.
+These stop the program at start, like any bad setting: `console` (traces printed among the log
+lines), and an `OTEL_TRACES_SAMPLER` other than `parentbased_traceidratio` or
+`parentbased_always_on` (what the sampler above is; any other would be ignored). A failed send is
+logged at warn, at most once a minute, as for metrics.
 
 **In production**, send to a collector or a trace store (Grafana Tempo, Jaeger, a vendor) with
 the endpoint setting; see [metrics.md](metrics.md#where-they-go) for why a collector. Keeping
@@ -92,8 +92,7 @@ use Explore). Jaeger keeps the newest 10,000 in memory.
   sends our trace to whoever we call; `internal/httpclient` does neither.
 - **Never personal data or secrets** in a span's name or attributes beyond the client's IP and
   user agent that requests carry: no user's details, tokens, payloads, query values or URLs with
-  keys. Names stay few and fixed (a route pattern, a sqlc name,
-  a job type), never an ID or a path.
+  keys. Names stay few and fixed (a route pattern, a sqlc name, a job type), never an ID or a path.
 - **A span of your own** for a slow step that isn't a query or a call: start it from the context
   you were given and end it on every path:
 

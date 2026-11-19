@@ -18,9 +18,10 @@ don't overwrite each other's numbers).
 - **HTTP requests** (API; [otelhttp](https://pkg.go.dev/go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp),
   `internal/api/telemetry.go`): `http.server.request.duration` (seconds) by `http.route` (the pattern,
   `/web/tasks/{id}`; a path no route matches has its client's prefix, `/web/*`), method and
-  status; its count is the number of requests, so 401s, 404s and 429s show too, a client that hung up before the reply as 499, and a reply a panic cut off midway
-  with `error.type` `aborted`. The health and readiness checks aren't recorded, nor otelhttp's
-  body-size histograms (dropped in `internal/telemetry`).
+  status. Its count is the number of requests, 401s, 404s and 429s included; a client that hung up
+  before the reply counts as 499, and a reply a panic cut off midway has `error.type` `aborted`.
+  The health and readiness checks aren't recorded, nor otelhttp's body-size histograms (dropped in
+  `internal/telemetry`).
 <!-- remove:end -->
 <!-- remove:worker -->
 - **Jobs** (worker; our own, as asynq has none; `internal/worker/logging.go`): `job.run.duration`
@@ -43,8 +44,9 @@ don't overwrite each other's numbers).
   (`db.operation.name` = `GetTask`), and the pool's use (`pgxpool.*`, pool named `main`:
   connections in use, idle, waits for a free one). The duration also times connecting, preparing
   and taking a connection (`pgx.operation.type`): count queries with `pgx.operation.type` `query`,
-  or each is counted more than once. Postgres's own exporter sees the server's side; only these see
-  time spent waiting for a connection or on the network, per program and copy.
+  or each is counted more than once. A Postgres exporter (a separate program reading the server's
+  statistics) sees the server's side; only these see time spent waiting for a connection or on the
+  network, per program and copy.
 <!-- remove:valkey -->
 - **Valkey, from the program's side** ([redisotel](https://github.com/redis/go-redis/tree/master/extra/redisotel),
   `startup.ConnectRedis`, `startup.RedisFailFast`): each command's time
@@ -62,7 +64,7 @@ through `internal/config`:
 
 | `OTEL_METRICS_EXPORTER` | What happens |
 |---|---|
-| unset, `otlp` | Pushed every `OTEL_METRIC_EXPORT_INTERVAL` ms (default 60000) to `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` (or `OTEL_EXPORTER_OTLP_ENDPOINT`; default `http://localhost:4318`), as OTLP over HTTP. |
+| unset, `otlp` | Pushed every `OTEL_METRIC_EXPORT_INTERVAL` ms (default 60000) to `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` (or `OTEL_EXPORTER_OTLP_ENDPOINT`; default `http://localhost:4318`), as OTLP (OpenTelemetry's own protocol) over HTTP. |
 | `none` | Off: nothing is recorded, at next to no cost. `OTEL_SDK_DISABLED=true` turns off metrics and traces both. An empty value is unset: on. |
 | `prometheus` | Served for pulling at `http://OTEL_EXPORTER_PROMETHEUS_HOST:OTEL_EXPORTER_PROMETHEUS_PORT/metrics` (default `localhost:9464`: in a container, set the host to `0.0.0.0`, or a scraper outside can't reach it). Give each program on one machine its own port. |
 
@@ -72,9 +74,9 @@ setting (an unknown exporter, `console`, which would print metrics among the log
 setting. On unless set to `none`, so a deploy that forgets the settings still sends to the usual
 local address, and says so when nothing is there: a push that fails is logged at warn
 (`source: opentelemetry`), at most once a minute (with `errors_skipped`, how many weren't), and
-the program carries on. On shutdown a pushing program sends what's left, within a second. Each start is a new
-`service.instance.id`, so its series are new: mind the store's series limits if copies restart
-often.
+the program carries on. On shutdown a pushing program sends what's left, within a second. Each
+start is a new `service.instance.id`, so its time series are new: mind the store's series limits if
+copies restart often.
 
 **In production**, push to a collector next to the programs (the
 [OpenTelemetry Collector](https://opentelemetry.io/docs/collector/) or Grafana Alloy) rather than
@@ -104,10 +106,11 @@ them from your own normal. **Urgent** means someone acts now; the rest can wait 
 `job` is each program's `service.name` (`<project>-<program>`) and `instance` its
 `service.instance.id`, as Prometheus names pushed metrics (OTLP); scope each rule to one environment
 too, adding `deployment_environment_name="production"` to its metrics, or test traffic dilutes
-production's. That label, like `service_version`, exists only if the store promotes the resource
-attribute (`promote_resource_attributes` in `local/prometheus.yml`); a stock Prometheus keeps both
-on `target_info` alone. With `OTEL_METRICS_EXPORTER=prometheus` (scraped), `instance` is the address
-scraped, the same after a restart: count copies by `service_instance_id` on `target_info` instead.
+production's. That label, like `service_version`, exists only if the store copies that
+program-wide value onto every metric (`promote_resource_attributes` in `local/prometheus.yml`); a
+stock Prometheus keeps both on `target_info` alone. With `OTEL_METRICS_EXPORTER=prometheus`
+(scraped), `instance` is the address scraped, the same after a restart: count copies by
+`service_instance_id` on `target_info` instead.
 
 Every program:
 
@@ -156,7 +159,8 @@ Every program:
   ```
 
 - **Slow queries**: the slowest 5% take over 0.5 s for 10 minutes, with a query every 10 s (a
-  program that queries rarely, a daily job's, would otherwise fire on one long query). The dashboard's "Query time p95, by query" names the query; `EXPLAIN` it.
+  program that queries rarely, a daily job's, would otherwise fire on one long query). The
+  dashboard's "Query time p95, by query" names the query; `EXPLAIN` it.
 
   ```promql
   histogram_quantile(0.95, sum by (le, job) (rate(db_client_operation_duration_seconds_bucket{pgx_operation_type="query"}[5m]))) > 0.5
@@ -330,9 +334,9 @@ go tool pprof -http=:8081 'http://127.0.0.1:6060/debug/pprof/heap'              
 curl 'http://127.0.0.1:6060/debug/pprof/goroutine?debug=2'                      # every goroutine
 ```
 
-- **Only on this machine**: `PPROF_ADDR` must be `127.0.0.1`, `::1` or `localhost` with a port,
-  or the program refuses to start. Profiles show the program's insides (its stacks, what's in
-  memory), so they never go on the network: reach a server's with a port forward
+- **Only on this machine**: `PPROF_ADDR` must be a loopback address (`127.0.0.1`, `::1`) or
+  `localhost`, with a port, or the program refuses to start. Profiles show the program's insides
+  (its stacks, what's in memory), so they never go on the network: reach a server's with a port forward
   (`kubectl port-forward pod/<pod> 6060`), or in plain Docker from a container sharing its network
   (`docker run --rm --network container:<name> curlimages/curl ...`; `-p` can't reach
   127.0.0.1 inside), and unset it once done. Programs sharing one network (an API and a worker in
@@ -342,6 +346,7 @@ curl 'http://127.0.0.1:6060/debug/pprof/goroutine?debug=2'                      
 - A profile over time (`?seconds=`, whole seconds: CPU, 30 by default; a trace, which takes
   fractions; or a heap or block profile's difference over that time) lasts up to 60 seconds, and
   slows the program a little meanwhile. Some pages pause it outright: `goroutine?debug=2` while it
-  writes every goroutine's stack, `heap?gc=1` for a full garbage collection. Only GET is served
-  (and POST for `symbol`, up to 1 MiB). `cmdline` isn't: it shows the program's arguments.
+  writes every goroutine's stack, `heap?gc=1` for a full garbage collection. Only GET and HEAD
+  are served (and POST for `symbol`, up to 1 MiB). `cmdline` isn't served: it shows the program's
+  arguments.
 

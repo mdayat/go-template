@@ -2,14 +2,15 @@
 
 Work that shouldn't make a caller wait (sending email, a report, a clean-up) runs as a **job** in
 the worker (`cmd/worker`), not in a request. Jobs go through a queue in Valkey (an open-source
-fork of Redis; any Redis works), run by [asynq](https://github.com/hibiken/asynq). Code puts jobs
-on the queue; the worker takes them off and runs them, retrying the ones that fail.
+fork of Redis), run by [asynq](https://github.com/hibiken/asynq). Code puts jobs on the queue; the
+worker takes them off and runs them, retrying the ones that fail. It needs Valkey 7.2+ or Redis 7+:
+scheduled jobs use `SET` with both `NX` and `GET`, which older versions refuse.
 
 Our code sees the queue only through `internal/queue`: a job (`queue.Job`), queueing one
 (`queue.Enqueuer`), a handler (`func(ctx, payload []byte) error`), the run it's in (`queue.Run`)
 and a timetable (`queue.Schedule`). `internal/queue/valkey` implements them with asynq, and only
-`cmd/` picks it (lint: depguard). Moving to another queue is a new implementation and a few lines
-in `cmd/`, not edits across the features.
+`cmd/` may import it (lint: depguard). Moving to another queue is a new implementation and a few
+lines in `cmd/`, not edits across the features.
 
 The example: `deleted_rows:purge` removes for good, from every soft-deleted table, the rows
 deleted more than 30 days ago ([database.md](database.md#soft-delete)). The worker's scheduler
@@ -42,13 +43,14 @@ an AI model): add a constant like `jobs.Queue` and a line in `jobs.Queues()` wit
 set the job's `Queue` to it. A job sent to a queue `jobs.Queues()` doesn't list is never run, so
 add every job's builder to `TestQueues` (`internal/jobs/jobs_test.go`), which checks its queue.
 
-`WORKER_QUEUES` overrides the numbers per instance, `default=7,slow=3`, and an instance takes only
-the queues it lists. So slow jobs can run on instances of their own (`WORKER_QUEUES=slow=3`) while
+`WORKER_QUEUES` overrides the numbers per instance, `default=7,slow=3` (once a `slow` queue is
+added; a name `jobs.Queues()` lacks stops the worker at start), and an instance takes only the
+queues it lists. So slow jobs can run on instances of their own (`WORKER_QUEUES=slow=3`) while
 others take the rest. A queue no instance takes never runs its jobs: those queued to run now show
 as a growing wait ([metrics.md](metrics.md#what-to-alert-on)), but those waiting for a retry or
 a later time stay `retrying` or scheduled, as only an instance taking the queue moves them on.
 The worker opens a database connection for each job it runs at once, and 2 for the outbox
-([database.md](database.md#connections)).
+([below](#queueing-through-the-outbox), [database.md](database.md#connections)).
 
 Removing a queue takes two deploys. Jobs already in it stay there, and once it's gone from
 `jobs.Queues()` no instance takes them. First send its jobs to another queue, keeping the old one
@@ -112,14 +114,13 @@ if e, ok := errors.AsType[*apperr.Error](err); ok && e.Kind == apperr.KindNotFou
 
 ## Time limits and shutdown
 
-Every job sets its `Timeout` in `internal/jobs`, in whole seconds. Queueing refuses anything else:
-asynq keeps whole seconds, cutting off the rest, and replaces a zero limit with its 30-minute
-default. The handler's context
-ends at the limit, so pass `ctx` to everything it calls, as in a request. A job past its limit
-counts as failed; asynq retries it while attempts are left, whatever the handler then returns (an
-`apperr` kind included). A limit over 5 minutes also needs the worker's `DB_STATEMENT_TIMEOUT`
-default raised to match ([database.md](database.md#time-limits)), or Postgres cuts the job's long
-statements first.
+Every job sets its `Timeout` in `internal/jobs`, in whole seconds, at least 1. Queueing refuses
+anything else: asynq drops fractions of a second and replaces a zero limit with its 30-minute
+default. The handler's context ends at the limit, so pass `ctx` to everything it calls, as in a
+request. A job past its limit counts as failed: asynq retries it while attempts are left, whatever
+the handler then returns (an `apperr` kind included). A limit over 5 minutes also needs the
+worker's `DB_STATEMENT_TIMEOUT` default raised to match ([database.md](database.md#time-limits)),
+or Postgres cuts the job's long statements first.
 
 On SIGTERM the worker stops its scheduler, stops taking jobs, and gives running ones 8 s to finish
 (`ShutdownTimeout` in `internal/worker/worker.go`, below Docker's default 10 s before a hard
@@ -142,13 +143,12 @@ contexts cancelled, which stops their queries. They run again on the next worker
 | error | it failed for good, or panicked |
 
 A failed run carries `error.message` (and `error.stack_trace` for a panic) on the same line. Inside
-a handler, `zerolog.Ctx(ctx)` is the job's logger: lines logged through it carry `job_type` and
-`job_id`, and `trace.id` and `span.id` when the run's trace is kept: the run is a span, in the trace
-of the code that queued it straight to the queue, or one of its own when queued through the outbox
-([tracing.md](tracing.md)). A job queued during a request carries `request_id`, that request's ID,
-either way. Log on a line of your own
-only what's worth finding later (`"deleted rows purged"` with each table's count), never the
-payload.
+a handler, `zerolog.Ctx(ctx)` is the job's logger: its lines carry `job_type` and `job_id`, plus
+`trace.id` and `span.id` when the run's trace is kept (traces may be sampled,
+[tracing.md](tracing.md)). The run is a span: in the trace of the code that queued it, if queued
+straight to the queue; in a trace of its own if queued through the outbox. Either way, a job queued
+during a request carries that request's `request_id`. Log a line of your own only for what's worth
+finding later (`"deleted rows purged"` with each table's count), never the payload.
 
 asynq also logs its own events (starting, shutting down, "Retry exhausted for task", a job put
 back in the queue), marked `"source":"asynq"`. Alert on the `job completed` lines, not on those.
@@ -186,7 +186,9 @@ Code that queues through the outbox needs a worker of the same release or newer 
 with an older one (the API deployed first, or the worker rolled back), jobs wait in the outbox,
 none lost, and the alert fires until the worker catches up. The worker needs 2 database connections
 besides its jobs' (`DB_MAX_CONNS` at least jobs + 2) and `DB_IDLE_IN_TRANSACTION_TIMEOUT` of at
-least 20 s, as a relay batch's transaction waits while it queues; it refuses to start otherwise.
+least 20 s; it refuses to start otherwise. A relay batch's transaction sits idle while it queues
+jobs: up to 10 s (it stops taking jobs at a third of its 30 s limit) plus a Valkey call in flight.
+Cut shorter, Postgres ends the transaction and undoes its deletes, so jobs already queued run again.
 
 <!-- remove:api -->
 ## Queueing from the API
@@ -206,12 +208,12 @@ a job adds the job in its own transaction instead ([above](#queueing-through-the
 Each schedule function (`purgeSchedules`) returns its jobs that run on a timetable, as
 `queue.Schedule`s with cron specs in UTC (`"@daily"`, `"0 3 * * *"`). Every worker process runs a
 scheduler, so with three workers each scheduled job is queued three times at the same moment;
-`Unique` (required) lets only the first through. asynq lets go of it once that copy succeeds,
-which for a quick job can be before another worker's timer fires, so the server also runs only the
-first copy of a scheduled job in its `Unique` time and drops the rest (`claimSlot` in
-`internal/queue/valkey`, a key in Valkey per queue, job type and payload; a retry runs only if its
-copy still holds it, so a late retry can't take the next run's place; one dropped is logged at
-warn). The window starts when a copy starts running: pick `Unique` well under the time between
+`Unique` (required) lets only the first through. asynq releases that hold once the copy succeeds,
+which for a quick job can be before another worker's timer fires. So the server also runs only the
+first copy of a scheduled job in its `Unique` time and drops the rest, logging each at warn
+(`claimSlot` in `internal/queue/valkey`: one Valkey key per queue, job type and payload). A retry
+runs only if its copy still holds the key, so a late retry can't take the next run's place.
+The window starts when a copy starts running: pick `Unique` well under the time between
 runs (an hour for a daily job, 30 minutes for an hourly one), or a copy that waited in the queue
 blocks the next run. Two schedules of the same job and payload share one window. A scheduled job
 still has to be safe to run twice: past `Unique`, if Valkey loses the key, or while a deploy mixes

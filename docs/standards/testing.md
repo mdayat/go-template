@@ -17,10 +17,10 @@ coverage number: covered lines can still be wrong, and a test that can't fail pr
     `internal/worker/main_test.go`) and checks **the error and the rows**.
   <!-- remove:end -->
 - **A service's rules are tested on the service**, on a real database: every input a rule
-  accepts or refuses, the exact limits, and the rows after. Example: `internal/task/service_test.go`.
-  The rules stay tested whichever entry points a project keeps. Tests through an entry point then
-  check what the caller gets: one case per distinct outcome, not every input that gives the same
-  one.
+  accepts or refuses, the exact limits, and the rows after. Example:
+  `internal/task/service_test.go`. The rules stay tested whichever entry points a project keeps.
+  Tests through an entry point then check what the caller gets: one case per distinct outcome, not
+  every input that gives the same one.
 - **Don't mock our own code.** A mock of our own service tests the mock. Fake only what we can't
   run locally: a payment provider, an email service, another company's API. Fake it with an
   `httptest.Server` and check what we send to it ([outside-calls.md](outside-calls.md#tests)).
@@ -34,8 +34,9 @@ coverage number: covered lines can still be wrong, and a test that can't fail pr
 ## A database per test
 
 `testdb.New(t)` returns a pool on a database that only this test uses, with every migration
-applied. It's copied from a master database built once per package, which takes about 35 ms. Tests don't share rows, so they can run in parallel and in any order, and each one
-creates the rows it needs.
+applied. It's copied from a master database built once per package, which takes about 35 ms.
+Tests don't share rows, so they can run in parallel and in any order, and each one creates the
+rows it needs.
 
 - Each package that uses it has `func TestMain(m *testing.M) { testdb.Main(m) }` (drops the master
   at the end).
@@ -79,8 +80,8 @@ uses database 0. Job handlers themselves don't need Valkey; see [worker.md](work
 - Helpers every feature's tests in a package use live in that package's `main_test.go`, not in one
   feature's test file, so removing a feature can't break the others.
 - The test decides pass or fail. Helpers build things and fetch results (`seedTask`, `tasksInDB`)
-  and stop the test only when that setup itself fails; the test compares the result
-  with `cmp.Diff` and reports, so each case decides its own message and whether to stop.
+  and stop the test only when that setup itself fails; the test compares the result with
+  `cmp.Diff` and reports, so each case decides its own message and whether to stop.
 - Helpers call `t.Helper()` and take `t` first. Tests use `t.Context()`, not
   `context.Background()`. — lint (thelper, usetesting, tparallel)
 - Test names are `Test` + what's tested, without underscores, also for unexported functions

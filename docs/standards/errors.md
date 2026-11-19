@@ -60,8 +60,8 @@ there, once: "no row" becomes `NotFound`, a unique violation on a known constrai
 isn't silently reported as the wrong conflict.
 
 Services recognise these errors through `internal/postgres` (`IsNotFound`, `IsUniqueViolation`),
-never by importing pgx: changing the driver then changes that package and the generated queries,
-not every service. — lint (depguard)
+never by importing pgx (lint: depguard): changing the driver then changes that package and the
+generated queries, not every service.
 
 <!-- remove:api -->
 ## Handlers

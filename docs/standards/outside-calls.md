@@ -14,11 +14,10 @@ The worker's purge job uses it: after removing old deleted rows for good, it rep
 
 ## Behind an interface, passed in from `cmd/`
 
-Code that calls a service defines a small interface for what it needs, where it uses it, never
-taking the HTTP client or the provider's SDK. `cmd/` builds the
-implementation (`webhook.NewHTTPSender`) and passes it in, so moving to another provider is a new
-implementation, and a setting that's not filled in can pass one that does nothing
-(`webhook.Discard`).
+Code that calls a service defines, where it uses it, a small interface for what it needs; it never
+takes the HTTP client or the provider's SDK. `cmd/` builds the implementation
+(`webhook.NewHTTPSender`) and passes it in, so moving to another provider is a new implementation,
+and when a setting is left unset `cmd/` can pass one that does nothing (`webhook.Discard`).
 <!-- remove:worker -->
 The worker's is `worker.EventSender`, and `cmd/worker` picks its implementation.
 <!-- remove:end -->
@@ -32,10 +31,10 @@ Go's default HTTP client (`http.Get`, `http.DefaultClient`) waits forever: one s
 holds a request, a database connection or a job until the process restarts. So:
 
 - Build the client with `httpclient.New(timeout, tracers)`. It limits the whole call, from
-  connecting to reading the reply, and connecting and the TLS handshake on their own; each call in a
-  traced request or job is a span, without its URL ([tracing.md](tracing.md)). Lint (forbidigo)
-  refuses the default client and transport; a client you build yourself (`&http.Client{}`) isn't
-  caught, so review catches that one.
+  connecting to reading the reply, and connecting and the TLS handshake on their own (at most 5 s).
+  Each call in a traced request or job is a span (one timed step of the trace), without its URL
+  ([tracing.md](tracing.md)). Lint (forbidigo) refuses the default client and transport; it misses
+  a client you build yourself (`&http.Client{}`), so review must catch that one.
 - It doesn't follow redirects: Go would repeat a POST as a GET without its body after a 301, 302 or
   303, so a "moved" service would look delivered while nothing was, and our headers would go to
   another host. A 3xx is an error that isn't retried; fix the URL.
@@ -75,12 +74,13 @@ client, a queue):
 | an error before the call (a body that can't be encoded, a URL that can't be parsed) | no: a bug |
 
 <!-- remove:worker -->
-A 429's `Retry-After` isn't honoured yet: the job is retried with the queue's own growing delays.
+A 429's `Retry-After` isn't honoured: the job is retried with the queue's own growing delays.
 
 A report whose job runs out of tries is lost: the purge has already happened, and the job fails
 for good. That's fine for the purge, since the next day's report says the same thing; work whose
-report must arrive (a payment's receipt) queues a job of its own to send it, through the outbox in
-the same transaction as the work ([worker.md](worker.md#queueing-through-the-outbox)).
+report must arrive (a payment's receipt) queues a job of its own to send it, through the outbox (a
+database table the worker moves jobs from) in the same transaction as the work
+([worker.md](worker.md#queueing-through-the-outbox)).
 
 <!-- remove:end -->
 ## Every call may happen twice

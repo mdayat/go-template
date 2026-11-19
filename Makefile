@@ -27,7 +27,7 @@ export DATABASE_URL ?= $(shell sed -nE 's/^(export[[:space:]]+)?DATABASE_URL=//p
 
 .PHONY: fmt lint test test-db-clean vuln build rename image image-migrate image-oneoff scan db-up \
 	db-down telemetry-up telemetry-down generate check-generated check-versions migrate-diff \
-	migrate-apply migrate-check migrate-hash
+	migrate-apply migrate-check migrate-hash check-images
 
 fmt:
 	$(TOOL) golangci-lint fmt ./...
@@ -123,6 +123,17 @@ image-worker:
 run-worker:
 	go run ./cmd/worker
 # remove:end
+
+# Runs the images make image built that need no settings, so one that builds but can't run (a path
+# or file it lacks) fails here, not at the first deploy: the migrate image applies the migrations to
+# a throwaway database in the compose Postgres (make db-up; no other database is touched), reached
+# through that container's own network, and the one-off image lists its commands. CI runs it.
+check-images:
+	docker compose exec -T postgres psql -U postgres -q -c 'DROP DATABASE IF EXISTS check_images WITH (FORCE)' -c 'CREATE DATABASE check_images'
+	docker run --rm --pull never --network container:$$(docker compose ps -q postgres) \
+		-e DATABASE_URL='postgres://postgres:postgres@localhost:5432/check_images?sslmode=disable' $(IMAGE)-migrate
+	docker compose exec -T postgres psql -U postgres -q -c 'DROP DATABASE check_images WITH (FORCE)'
+	docker run --rm --pull never $(IMAGE)-oneoff
 
 # Builds every image and fails if one has a serious known hole, with a fix out, in its system
 # packages (make vuln checks the Go code, more precisely). Needs trivy (CI installs it). A hole

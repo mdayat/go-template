@@ -12,19 +12,21 @@ docker run --rm -e DATABASE_URL=... <name>-oneoff trim-task-titles --apply   # o
 ```
 
 `make image-oneoff` builds the image (`make image` builds it with the rest). It reads
-`DATABASE_URL`, `APP_ENV`, `LOG_LEVEL`, the [time limits](database.md#time-limits), 1 minute each
-by default (a batch is short, so a statement or an idle transaction that long is stuck, holding
-locks while the apps run), and the memory settings every program reads (`AUTOMEMLIMIT`).
+`DATABASE_URL`, `APP_ENV`, `LOG_LEVEL`, `DB_MAX_CONNS` (2 by default: a run works one batch at a
+time), the memory settings every program reads (`AUTOMEMLIMIT`), and the
+[time limits](database.md#time-limits), 1 minute each by default: a batch is short, so a statement
+or an idle transaction that long is stuck, holding locks while the apps run.
 
 ## What every run gets
 
 `internal/oneoff` runs the command (`Invocation.Run`):
 
 - **A dry run unless `--apply`.** The command does all its work, in transactions that are then
-  undone, so its report is what `--apply` would do: the same code, the same counts. Except where
-  one row's fix depends on another batch's: that batch was undone, so the later one sees the rows
-  as they were (`--apply` may then count a clash the dry run didn't). A batch whose work went on
-  after a failed statement fails in a dry run too, since `--apply` couldn't save it.
+  undone, so its report is what `--apply` would do: the same code, the same counts. The exception:
+  when one row's fix depends on an earlier batch's, the later batch sees the rows as they were,
+  since the earlier one was undone (`--apply` may then count a clash the dry run didn't). A batch
+  whose work went on after a failed statement fails in a dry run too, since `--apply` couldn't save
+  it.
 - **A run ID** (`run_id`) on every line the run logs, through `r.Log` or, in the services it
   calls, `zerolog.Ctx(ctx)`; with `command`, `apply` and the build's `version`.
 - **One summary line**, `command completed`: `result` (`done`, `failed` or `interrupted`), the

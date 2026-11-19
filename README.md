@@ -50,6 +50,17 @@ jobs. Keep both, one or neither: see [Choose what you need](#choose-what-you-nee
 | `internal/authtest`, `scripts/devtoken` | a stand-in sign-in provider: for tests, and for local runs (`make dev-token`) |
 | `docs/standards/http-api.md` | [the HTTP API's rules](docs/standards/http-api.md) |
 
+Two parts solve problems not every API has; each costs nothing while unused:
+
+- **Safe POST retries** ([`Idempotency-Key`](docs/standards/http-api.md#retrying-a-post-safely)):
+  only requests that send the header use it. Worth it where running a request twice costs
+  something (a payment, an order, a message sent). Without such endpoints, take out `keepReplies`
+  (`NewRouter`), the `Idempotency` service and its Valkey client (`cmd/api/main.go`), and
+  `internal/idempotency`, then fix what the compiler names (`internal/api/idempotency.go` and its
+  test go too).
+- **CORS** ([`CORS_ALLOWED_ORIGINS`](docs/standards/http-api.md#web-pages-on-other-sites-cors)):
+  off unless set; needed only by web pages served from another site.
+
 <!-- remove:end -->
 <!-- remove:worker -->
 ### The worker and the job queue
@@ -63,6 +74,15 @@ jobs. Keep both, one or neither: see [Choose what you need](#choose-what-you-nee
 | `internal/worker` | job handlers, one JSON log line per job, retries, the schedule |
 | `internal/testqueue` | helpers for tests that queue jobs |
 | `docs/standards/worker.md` | [the rules for jobs](docs/standards/worker.md) |
+
+Two parts solve problems not every service has:
+
+- **The outbox** ([worker.md](docs/standards/worker.md#queueing-through-the-outbox)): a job is
+  saved in the database with the rows it's about, and the worker moves it to the queue within a
+  second. Worth it when a lost or an extra job matters, and to keep queueing while Valkey is down.
+  Queueing straight to Valkey (`valkey.NewEnqueuer`) is simpler, if neither matters.
+- **Several queues** ([`WORKER_QUEUES`](docs/standards/worker.md#queues)): one queue is enough
+  until slow jobs start holding up quick ones.
 
 <!-- remove:end -->
 <!-- remove:valkey -->
@@ -83,7 +103,7 @@ its memory limit it refuses writes instead, which shows as errors. Alert on its 
 
 | Path | What |
 |---|---|
-| `cmd/oneoff` | runs data fixes and backfills by hand, a dry run unless `--apply`: `go run ./cmd/oneoff` lists them |
+| `cmd/oneoff` | runs data fixes and backfills by hand, as a dry run (does the work, saves nothing) unless `--apply`: `go run ./cmd/oneoff` lists them |
 | `internal/oneoff` | each command, and what every run gets: transactions undone in a dry run, a run ID, one summary line |
 | `docs/standards/commands.md` | [the rules for one-off commands](docs/standards/commands.md) |
 
@@ -139,14 +159,15 @@ its memory limit it refuses writes instead, which shows as errors. Alert on its 
 | `make migrate-diff name=<what_changed>` | write a migration from your `db/schema.sql` edit |
 | `make generate` | regenerate `internal/db` from `db/queries` |
 | `make migrate-apply` | apply migrations to `DATABASE_URL` |
-| `make check-generated` | fail if generated code, `atlas.sum` or migrations are out of date |
-| `make migrate-check` | fail if a migration new since `origin/main` could break the app still running during the deploy (`base=<commit>` compares with another) |
+| `make check-generated` | fail if generated code, `atlas.sum`, migrations or a `go.mod` are out of date |
+| `make migrate-check` | fail if a migration added since this branch left `origin/main` could break the app still running during the deploy, or an older one was edited, deleted or renamed (`base=<commit>` compares with another commit) |
 | `make migrate-hash` | update `atlas.sum` after editing a migration by hand |
 | `make check-versions` | fail if Go's or Atlas's version differs between the places it's pinned |
 | `make vuln` | known vulnerabilities in dependencies |
 | `make image` | build each program's image and the migrate image |
+| `make check-images` | after `make image` and `make db-up`: run the migrate image on a throwaway database and start the one-off image, so an image that can't run fails before a deploy (CI runs it) |
 | `make scan` | build the images and fail on a serious known hole, with a fix out, in their system packages (needs [Trivy](https://trivy.dev); CI runs it) |
-| `make test-db-clean` | drop databases that failed tests kept for inspection |
+| `make test-db-clean` | drop the databases failed tests kept for inspection, and master databases an interrupted run left (not while tests run) |
 | `make telemetry-up` / `make telemetry-down` | start / stop Prometheus, Jaeger (http://localhost:16686) and Grafana (http://localhost:3000) for local metrics and traces; `.env` from `.example.env` already sends to them |
 
 <!-- remove:api -->
@@ -163,17 +184,17 @@ Before you push: `make fmt lint test check-generated migrate-check`. The databas
 ### Keeping dependencies up to date
 
 Run Dependabot when you want updates: on GitHub, **Insights → Dependency graph → Dependabot →
-Check for updates** (it also runs once a quarter, in case nobody does, and every week for the
-Dockerfile's base images: they're pinned by digest, so a security fix to one arrives only this
-way). Each run opens at most four pull requests, one each for Go modules (the app's and the
-tools'), GitHub Actions, the Dockerfile's base images and the local Prometheus, Jaeger and Grafana
-in `compose.yaml`; merge each once CI passes (CI doesn't start those three: try theirs with `make
-telemetry-up` first), or close it to skip. When one update in a pull request breaks CI (a new lint
-rule, a changed API), fix the code in that pull request, or add the dependency to `ignore` in
-`.github/dependabot.yml` and check for updates again. Known security holes don't wait for
-Dependabot: `make vuln` (the Go code) and `make scan` (the images' system packages), in CI, fail on
-them. Two versions are changed by hand, everywhere at once (`make check-versions`, run
-by CI, fails until they agree):
+Check for updates**. It also runs once a quarter in case nobody does, and weekly for the
+Dockerfile's base images: they're pinned by digest (an exact image ID), so a security fix to one
+arrives only this way. Each run opens at most four pull requests: Go modules (the app's and the
+tools'), GitHub Actions, the Dockerfile's base images, and the local Prometheus, Jaeger and Grafana
+in `compose.yaml`. Merge each once CI passes, or close it to skip. CI doesn't start Prometheus,
+Jaeger or Grafana: try their pull request with `make telemetry-up` first. When one update in a pull
+request breaks CI (a new lint rule, a changed API), fix the code in that pull request, or add the
+dependency to `ignore` in `.github/dependabot.yml` and check for updates again. Known security
+holes don't wait for Dependabot: in CI, `make vuln` (the Go code) and `make scan` (the images'
+system packages) fail on them. Two versions are changed by hand, everywhere at once (`make
+check-versions`, run by CI, fails until they agree):
 
 - **Go:** the `go` line in `go.mod` and `tools/go.mod`, and the Dockerfile's `golang` image.
   Dependabot's pull request for a newer `golang` image is the reminder; `make vuln` also reports
@@ -205,14 +226,15 @@ tests), then remove tasks, in one go with your first table:
      internal/api/tasks_test.go`. Replace tasks with your feature in `internal/api/router.go`: the
      `Tasks` field of `api.Services`, its line in `NewServices`, and the `mobile.Tasks{...}` and
      `web.Tasks{...}` lines in `NewRouter`. Keep `internal/api/handler` (paging and path IDs
-     included): your feature's handlers use it. Two tests of the router itself call the example's
-     routes: point `TestClientPrefixes` (`router_test.go`) and `limitedRoute`
-     (`ratelimit_test.go`) at yours.
+     included): your feature's handlers use it. Three places in the router's tests call the example's
+     routes: point `TestClientPrefixes` (`router_test.go`), `limitedRoute` (`ratelimit_test.go`)
+     and the POST retry tests (`idempotency_test.go`, which also count rows in `tasks`) at yours.
    <!-- remove:end -->
    <!-- remove:worker -->
    - The worker's part: replace tasks with your feature in `internal/worker/worker.go` (the `Tasks`
      field of `worker.Services` and its line in `NewServices`) and in `tablePurges`
-     (`internal/worker/purge.go`), whose purge every soft-deleted table needs. The purge's tests
+     (`internal/worker/purge.go`): every soft-deleted table (rows marked with `deleted_at`, not
+     removed) needs its purge, which removes old deleted rows for good. The purge's tests
      (`internal/worker/purge_test.go`) seed tasks: seed your table instead.
    <!-- remove:end -->
    - The example one-off command: `rm internal/oneoff/trim_task_titles.go
@@ -240,9 +262,9 @@ git sees, so `git restore . && git clean -fd` undoes it.
 
 | You want | Run | What goes |
 |---|---|---|
-| the HTTP API only | `make remove what=worker` | the worker and the whole job queue (asynq), the purge endpoint |
+| the HTTP API only | `make remove what=worker` | the worker, the whole job queue (asynq) and the outbox, the purge endpoint |
 | the worker only | `make remove what=api` | the API and its settings (`HTTP_ADDR`, sign-in, rate limits) |
-| neither: a program of your own | both of the above | both, and Valkey (`REDIS_URL`), which only they use; leaving the shared core and every standard's example |
+| neither: a program of your own | both of the above | both, and Valkey (`REDIS_URL`), which only they use; the shared code and every standard's example stay |
 | both | `make remove what=markers` | only the `remove:` comments in the files, and the remove tool |
 
 Each removal deletes the part's folders and the lines marked for it in shared files, then
@@ -251,8 +273,7 @@ is never edited (git ignores it): delete the removed part's settings from it by 
 as their migrations are history: without the worker the `outbox` table is unused; drop it with a
 migration of your own (`make migrate-diff`, with an `-- allow-risky:` line, as
 [database.md](docs/standards/database.md#migrations-that-are-safe-while-the-old-app-runs) says)
-once the change is deployed. CI then checks only the
-shape you chose.
+once the change is deployed. CI then checks only the parts you kept.
 
 <!-- remove:end -->
 ## A program of your own
@@ -284,7 +305,8 @@ Build the images with `make image` (on an arm64 Mac, for amd64 servers:
 
 1. Run the migrate image once, with the database's `DATABASE_URL`:
    `docker run --rm -e DATABASE_URL=... <name>-migrate`. Migrations must work with the app
-   version still running ([why](docs/standards/database.md#migrations-that-are-safe-while-the-old-app-runs)).
+   version still running
+   ([why](docs/standards/database.md#migrations-that-are-safe-while-the-old-app-runs)).
 2. Run any one-off command the release needs with the oneoff image, a dry run first:
    `docker run --rm -e DATABASE_URL=... <name>-oneoff <command>`, then again with `--apply`
    ([commands.md](docs/standards/commands.md)).
@@ -303,10 +325,10 @@ both off.
 Profiles (where CPU and memory go) are off unless `PPROF_ADDR` is set, and then only on the
 machine itself: reach them with a port forward ([profiles](docs/standards/metrics.md#profiles)).
 
-Give each container a memory limit. Go doesn't read it by itself (it does read the CPU limit), so at
-start each program sets Go's own limit (`GOMEMLIMIT`) to 90% of the container's: near it, Go frees
-memory harder instead of the container killing the program for going past it. The start log shows
-the value, and so does the `go.memory.limit` metric (absent when there's no limit).
+Give each container a memory limit. Go reads the container's CPU limit but not its memory limit, so
+at start each program sets Go's own limit (`GOMEMLIMIT`) to 90% of the container's: near it, Go
+frees memory harder instead of the container killing the program for going past it. The start log
+shows the value, and so does the `go.memory.limit` metric (absent when there's no limit).
 `AUTOMEMLIMIT=0.8` changes the share, `AUTOMEMLIMIT=off` turns this off, and a `GOMEMLIMIT` you set
 (`450MiB`) is kept as it is: set it in the environment, as Go reads it before `.env` is loaded (the
 programs refuse one there). Without a container limit, or one that can't be read (a warning),
@@ -346,7 +368,7 @@ The programs read settings only from the environment (and a local `.env`). Let t
 secrets there from your secret manager, and the code never needs to know which one you use:
 Kubernetes External Secrets, ECS task definition `secrets` (AWS Secrets Manager or Parameter Store),
 or `infisical run -- /<program>` (this needs the Infisical CLI in the image; the template's images
-hold only the program). Changing secret manager then changes no code.
+hold only the program).
 
 If the program must fetch its secrets itself (the platform can't fill the environment), fetch them
 all once at startup into a `config.Map` (a `config.Source`), and pass it after `config.Env()` in

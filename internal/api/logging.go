@@ -9,6 +9,7 @@ import (
 	"runtime/debug"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -17,6 +18,11 @@ import (
 
 	"github.com/mdayat/go-template/internal/api/handler"
 )
+
+// maxLoggedText is the most of the path and User-Agent a line keeps. Both are the client's to
+// choose (up to the 64 KB header limit), and a 404 needs no sign-in and has no rate limit: kept
+// whole, any client could write lines of tens of KB at will.
+const maxLoggedText = 512
 
 // statusClientClosed is logged when the client hung up before any reply was written. It's nginx's
 // "client closed request"; no reply carries it.
@@ -66,8 +72,8 @@ func logRequests(next http.Handler) http.Handler {
 
 		hlog.FromRequest(r).WithLevel(level).
 			Dict("http", httpFields).
-			Dict("url", zerolog.Dict().Str("path", r.URL.Path)).
-			Dict("user_agent", zerolog.Dict().Str("original", r.UserAgent())).
+			Dict("url", zerolog.Dict().Str("path", truncate(r.URL.Path))).
+			Dict("user_agent", zerolog.Dict().Str("original", truncate(r.UserAgent()))).
 			Dict("client", clientFields(r)).
 			Float64("duration_ms", float64(time.Since(start))/float64(time.Millisecond)).
 			Msg("request completed")
@@ -146,4 +152,18 @@ type serverErrorWriter struct {
 func (w serverErrorWriter) Write(p []byte) (int, error) {
 	w.logger.Error().Str("source", "net/http").Msg(strings.TrimSpace(string(p)))
 	return len(p), nil
+}
+
+// truncate keeps at most maxLoggedText bytes of s, ending before a letter's start, and marks a cut
+// with "...". A letter is at most 4 bytes, so it steps back at most 3: in text that isn't UTF-8
+// (bytes with no letter start), it doesn't walk back to nothing.
+func truncate(s string) string {
+	if len(s) <= maxLoggedText {
+		return s
+	}
+	cut := maxLoggedText
+	for cut > maxLoggedText-(utf8.UTFMax-1) && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + "..."
 }

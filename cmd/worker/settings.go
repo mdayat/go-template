@@ -98,8 +98,10 @@ func readQueues(value string, known []queue.Limit) ([]queue.Limit, error) {
 	return queues, nil
 }
 
-// minIdleInTransaction is the shortest DB_IDLE_IN_TRANSACTION_TIMEOUT the worker takes: a relay
-// batch's transaction sits idle while it queues jobs, up to half its 30 s limit and one Valkey call.
+// minIdleInTransaction is the shortest DB_IDLE_IN_TRANSACTION_TIMEOUT the worker takes. A relay
+// batch's transaction sits idle while it queues jobs: up to 10 s (a third of its 30 s limit) plus
+// a Valkey call in flight (up to 2 s each to get a connection, connect, send and answer), so 20 s
+// leaves room to spare.
 // Cut shorter, the batch's deletes are lost and its jobs queued again: a finished one runs twice.
 const minIdleInTransaction = 20 * time.Second
 

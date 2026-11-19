@@ -19,8 +19,8 @@ standard library / others / this module); don't format by hand.
 - Package names are short lowercase nouns that say what's inside. Never `util`, `common`,
   `helpers`, `models`: they say nothing and collect unrelated code. — review
 - Receivers are one or two letters from the type, the same in every method: `func (s *Service)`,
-  `func (tr Tasks)`. — the same in every method: lint (revive `receiver-naming`); short and
-  from the type: review
+  `func (tr Tasks)`. — same in every method: lint (revive `receiver-naming`); short and from the
+  type: review
 - Don't rename an import unless two imports clash or the package name is unclear
   (`stdlog "log"` next to zerolog's `log` is fine; alone it isn't). — review
 - No `Get` prefix on getters (`Title()`, not `GetTitle()`); don't write getters or setters for a
@@ -39,7 +39,8 @@ standard library / others / this module); don't format by hand.
 - Group related constants in one `const (...)` block. Use `iota` only when the values don't matter
   (they're never stored or sent); set values explicitly when they do. — review
 - Name the fields in struct literals: `Task{ID: id, Title: t}`. Always for another package's type;
-  for our own, leave them out only in table-test rows whose struct is declared right above. — review
+  for our own, leave them out only in table-test rows whose struct is declared right above.
+  — review
 - Prefer `make([]T, 0, n)` when the size is known, so the slice doesn't regrow. — review
 
 ## Functions and control flow
@@ -66,7 +67,8 @@ standard library / others / this module); don't format by hand.
   with only the methods that consumer calls, and only once a second implementation or a test needs
   it. — lint for returns (ireturn); the rest: review
 - If the standard library has the interface (`io.Reader`, `fmt.Stringer`), use it. — review
-- Use a named type to make a value's meaning and limits part of its type (`type Kind int`). — review
+- Use a named type to make a value's meaning and limits part of its type (`type Kind int`).
+  — review
 - Avoid `any` in our own APIs; it moves type errors from the compiler to run time. — review
 - Pointers only to share or change a value, or for large structs; not "for speed" by default.
   — review
@@ -82,7 +84,8 @@ The rules for which error to return live in [errors.md](errors.md). Style only:
   the wrapped error already says (pgx's errors name the host they tried). — review
 - Wrap with `%w` to keep the cause, and compare with `errors.Is` / `errors.As` (or
   `errors.AsType`), never `==` or a type assertion on a wrapped error. — lint (errorlint)
-- An error type's name ends in `Error`; a sentinel's starts with `Err`. — lint (errname)
+- An error type's name ends in `Error`; a sentinel error's (a fixed error value callers
+  compare against, like `queue.ErrNoRetry`) starts with `Err`. — lint (errname)
 
 ## Concurrency
 

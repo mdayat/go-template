@@ -12,8 +12,8 @@ The worker (`cmd/worker`, `internal/worker`) runs jobs queued with asynq on Valk
 
 ## Before you finish
 
-Run `make fmt lint test check-generated migrate-check`. All five must pass; don't silence a linter with
-`//nolint` unless the line is truly a false positive, and then name the linter and the reason.
+Run `make fmt lint test check-generated migrate-check`. All five must pass. Use `//nolint` only on
+a true false positive, naming the linter and the reason.
 `make test` starts the compose services in Docker; tests read `TEST_DATABASE_URL` from the
 environment or `.env` (see `.example.env`).
 <!-- remove:valkey -->
@@ -61,10 +61,10 @@ Never edit `internal/db/` (generated) or a migration that's already merged (writ
 Use JSON only through `internal/json`, never go-json or `encoding/json` (tests may use
 `encoding/json`); lint refuses it. Import pgx only in `internal/postgres`, `internal/startup`,
 `internal/oneoff` and `internal/testdb` (tests may use it to seed rows); lint refuses it
-elsewhere. A generated `pgtype` type gets an override in `sqlc.yaml` instead.
+elsewhere. Where sqlc generates a pgx `pgtype` type, map it to a Go type in `sqlc.yaml` instead.
 <!-- remove:valkey -->
 Valkey connections come from `internal/startup`, opened in `cmd/` (tests': `internal/testredis`);
-lint refuses go-redis elsewhere.
+lint refuses go-redis outside those and packages named `valkey`, which build on it.
 <!-- remove:end -->
 <!-- remove:worker -->
 Jobs are queued, handled and scheduled through `internal/queue`, never asynq; lint refuses it
@@ -90,8 +90,8 @@ outside `cmd/`.
 - Each client has its own package and prefix (http-api.md): `/mobile/v1` only grows (add a field
   or route; never remove, rename or retype one; a break is `/mobile/v2`), `/web` and `/admin`
   change with their apps. Never share a request or reply type between clients (the error body,
-  `handler.Problem`, is the one shared). Paths are plural
-  kebab-case nouns; JSON keys and query parameters snake_case.
+  `handler.Problem`, is the one shared). Paths are plural kebab-case nouns; JSON keys and query
+  parameters snake_case.
 - `validate` tags check shape; the service checks meaning.
 - Lists: an object with a list field, cursor paging, never `null` for an empty list.
 - Every route but `/healthz` and `/readyz` is behind `authenticate` (sign-in), which turns the
@@ -99,8 +99,9 @@ outside `cmd/`.
   never read tokens or a provider's claims; tables point at `users.id`. A provider is an
   `Authenticator` implementation picked in `cmd/api`. Endpoint tests are signed in by `testAPI`.
 - A POST with an `Idempotency-Key` runs once per user and key (`keepReplies`); its retries get the
-  kept reply. Nothing to add per endpoint, but a POST that works past a minute (`handler.Detach`)
-  outlives its key's hold: see [retrying a POST](docs/standards/http-api.md#retrying-a-post-safely).
+  kept reply. Nothing to add per endpoint, but a POST that runs past a minute (`handler.Detach`)
+  outlasts the minute its key is reserved for it: see
+  [retrying a POST](docs/standards/http-api.md#retrying-a-post-safely).
 - Handlers pass `handler.CurrentUser(r)` to services, which decide who may do what: a user's own
   rows only (someone else's is `NotFound`, never `Forbidden`), an admin's everyone's. `Forbidden`
   (403) is for actions that are no secret, like an admin-only route (under `/admin`, behind
@@ -114,15 +115,16 @@ outside `cmd/`.
 
 <!-- remove:end -->
 **Logging** ([logging.md](docs/standards/logging.md))
-- Don't add log lines for errors: the summary line of the work that failed already carries them.
+- Don't add log lines for errors: the one line logged when the failed request, job or command ends
+  already carries them.
 - Never log bodies, headers, query strings, secrets or personal data.
 - Never call `zerolog.Ctx(ctx).UpdateContext` where `ctx` may lack a logger of its own.
 
 **Metrics** ([metrics.md](docs/standards/metrics.md))
 - Record through the `metric.MeterProvider` passed in from `cmd/` (`telemetry.Start`); never
   OpenTelemetry's global one. Ready-made instrumentation first; your own only where none exists.
-- Never a personal or unbounded value in an attribute (user ID, raw path, IP, SQL, anything a
-  client sets): route patterns and sqlc query names only.
+- Never a personal value, or one with no fixed set of possibilities, in an attribute (user ID, raw
+  path, IP, SQL, anything a client sets): route patterns and sqlc query names only.
 - Tests check metrics with `internal/metrictest`.
 
 **Traces** ([tracing.md](docs/standards/tracing.md))
@@ -149,12 +151,12 @@ outside `cmd/`.
 <!-- remove:end -->
 **Outside services** ([outside-calls.md](docs/standards/outside-calls.md))
 - Behind a small interface defined where it's used, passed in from `cmd/`; its implementation in
-  its own package (`internal/webhook`). HTTP clients come from `httpclient.New(timeout, tracers)`, never
-  `http.Get`/`http.DefaultClient` or a client you build yourself.
+  its own package (`internal/webhook`). HTTP clients come from `httpclient.New(timeout, tracers)`,
+  never `http.Get`/`http.DefaultClient` or a client you build yourself.
 - While a caller waits (a request), don't retry.
 <!-- remove:worker -->
 - In a job, return the error; mark it `queue.ErrNoRetry` when `httpclient.Retryable` says a retry
-  can't help. Send the job's ID as an idempotency key.
+  can't help. Send the job's ID as an idempotency key (so the service can spot a repeated call).
 <!-- remove:end -->
 - The call comes last, after work that's safe to repeat, and sends what's true after a repeat.
   Never put the URL, bodies or tokens in errors or logs.
@@ -165,10 +167,11 @@ outside `cmd/`.
   rename or drop a column over several deploys; big-table indexes `CONCURRENTLY` with
   `-- atlas:txmode none`.
 - Rules that must hold under concurrent requests are schema constraints, with names.
-- Deletes are soft (`deleted_at`): every query skips deleted rows (`deleted_at IS NULL`, on every
-  soft-deleted table in a join), unless its name ends in `IncludingDeleted`; `make lint` (`sqlc
-  vet`) refuses one that doesn't. A new table goes in that rule's list in `sqlc.yaml`. Unique
-  rules are partial indexes `WHERE deleted_at IS NULL`.
+- Deletes are soft (the row gets a `deleted_at`, not removed): every query skips deleted rows
+  (`deleted_at IS NULL`, on every soft-deleted table in a join), unless its name ends in
+  `IncludingDeleted`; `make lint` (`sqlc vet`) refuses one that doesn't. A new soft-deleted table
+  goes in that rule's list in `sqlc.yaml`. Unique rules are partial indexes
+  `WHERE deleted_at IS NULL`.
 - Text going into a `text` column is checked for NUL (`\u0000`) in the service; Postgres refuses it.
 - Retry a transaction only on 40001 and 40P01, and never do outside calls inside it.
 
@@ -192,8 +195,8 @@ outside `cmd/`.
 - Return early; no named results; `ctx` first; no package-level mutable state, no `init`.
 - Accept interfaces where you use them, return concrete types. Something outside the process (a
   queue, a service, a secret manager; not the database) goes behind a small interface defined
-  where it's used, built in `cmd/`, with `var _ I = (*T)(nil)` beside each implementation; no
-  interface for our own code with one implementation
+  where it's used, built in `cmd/`, with a compile-time check `var _ I = (*T)(nil)` beside each
+  implementation; no interface for our own code with one implementation
   ([code-style.md](docs/standards/code-style.md#swapping-an-implementation)).
 - Comments say why, never what or when; no history in comments.
 - No `util`/`common`/`helpers` packages.

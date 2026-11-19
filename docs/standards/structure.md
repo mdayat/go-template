@@ -6,8 +6,8 @@ module can import. Inside `internal/`, these rules are ours:
 
 - **A package per feature, named for what it gives**: `internal/task` gives `task.Service` and
   `task.Task`. Never a package by kind (`models`, `utils`, `common`): it grows into everything, and
-  every feature then depends on all of it. A package of what one kind of entry point shares (what
-  every HTTP handler needs, say) is the exception, kept to just that.
+  every feature then depends on all of it. The exception is a package of what one kind of entry
+  point shares (what every HTTP handler needs, say), kept to just that.
 - **Rules live in the feature's package**, and every entry point calls them: what a valid task is,
   who may see it. An entry point (an HTTP handler, a job handler) only reads its input, calls the
   service and writes the result, so a rule is written, and tested, once.
@@ -57,7 +57,7 @@ In the worker:
 A data fix or backfill for the feature, run once by hand, is a command of `cmd/oneoff`:
 `internal/oneoff/<name>.go` with its test, listed in `Commands()` ([commands.md](commands.md)).
 
-A feature only one entry point uses has only its rows.
+A feature only one entry point uses needs only that entry point's rows.
 <!-- remove:api -->
 A route only one app needs is only in that app's package.
 
@@ -71,7 +71,7 @@ change). What their handlers share is `internal/api/handler`: it can't be in `in
 which imports the client packages to mount them. Its tests are in `internal/api`
 (`decode_test.go`, `problem_test.go`), through a router with the shared middleware.
 
-A client's package keeps a file per feature while that's enough. One that outgrows it (five or
-more files for one feature) becomes a package of its own under the client
-(`internal/api/web/invoice`), mounted the same way.
+A client's package keeps a file per feature while that's enough. A feature that outgrows it (five
+or more files) becomes a package of its own under the client (`internal/api/web/invoice`), mounted
+the same way.
 <!-- remove:end -->

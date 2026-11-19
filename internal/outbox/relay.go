@@ -57,7 +57,10 @@ func (r *Relay) Run(ctx context.Context) {
 }
 
 // relayTimeout bounds one batch's transaction, which holds its rows' locks and a connection. A batch
-// stops taking jobs at half of it, leaving the rest time to delete and commit.
+// stops taking jobs at a third of it, leaving the rest time to delete and commit, and keeping the
+// transaction's idle time (that third plus a Valkey call in flight, each of its steps limited to
+// 2 s) under the worker's minimum DB_IDLE_IN_TRANSACTION_TIMEOUT: past it, Postgres ends the
+// transaction and undoes the deletes, and jobs already queued run again.
 const relayTimeout = 30 * time.Second
 
 // moveOnce queues the oldest jobs, each under its row's ID, and deletes those queued, in one
@@ -83,7 +86,7 @@ func (r *Relay) moveOnce(ctx context.Context) (int, error) {
 		}
 		var done []uuid.UUID
 		for _, row := range rows {
-			if ctx.Err() != nil || time.Since(start) > relayTimeout/2 {
+			if ctx.Err() != nil || time.Since(start) > relayTimeout/3 {
 				break
 			}
 			job := jobFrom(row)

@@ -142,9 +142,12 @@ func run() error {
 		Handler:           api.NewRouter(log.Logger, providers.Meters, providers.Tracers, services, ready, authn, cfg.limits, cfg.allowedOrigins),
 		ErrorLog:          api.ServerErrorLog(log.Logger),
 		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       10 * time.Second,
-		WriteTimeout:      10 * time.Second,
-		IdleTimeout:       120 * time.Second,
+		// Go's default is 1 MB of headers per request. Real clients send a few KB; the rest only
+		// lets one request make the server read, and log, more.
+		MaxHeaderBytes: 64 << 10,
+		ReadTimeout:    10 * time.Second,
+		WriteTimeout:   10 * time.Second,
+		IdleTimeout:    120 * time.Second,
 	}
 
 	// Bind before logging, so "listening" is only logged once the port is ours.

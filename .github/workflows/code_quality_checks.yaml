@@ -129,3 +129,6 @@ jobs:
       - name: Build images
         if: matrix.remove != ''
         run: make image
+
+      - name: Run the migrate and one-off images
+        run: make check-images

@@ -7,8 +7,8 @@ recognise them.
 
 ## One summary line each
 
-Each piece of work a program handles ends with exactly one summary line. A failure carries its error on
-that line, and a panic its stack: there is never a second line for the same failure.
+Each piece of work a program handles ends with exactly one summary line. A failure carries its error
+on that line, and a panic its stack: never a second line for the same failure.
 
 <!-- remove:api -->
 ### Requests
@@ -23,11 +23,11 @@ that line, and a panic its stack: there is never a second line for the same fail
  "duration_ms":10.6,"message":"request completed"}
 ```
 
-- `user_agent.original` is what the client sent; the mobile apps send `<app>/<version>`, so the
-  lines show which app versions still call a route
+- `user_agent.original` is what the client sent, cut to 512 bytes; the mobile apps send
+  `<app>/<version>`, so the lines show which app versions still call a route
   ([http-api.md](http-api.md#clients-paths-and-versions)).
 - `http.route` is the route pattern (`/web/tasks/{id}`), so requests group by endpoint; `url.path`
-  is the actual path.
+  is the actual path, cut to 512 bytes.
 - `request_id` is new for every request and sent back as the `X-Request-Id` header, so a user's
   bug report can be matched to its line. A client's own `X-Request-Id` is ignored: it could be
   forged.
@@ -105,7 +105,7 @@ and the field sticks to every later line of the whole process.
 
 ## Startup, shutdown and libraries
 
-Startup and shutdown use the global `log.Logger`, each program's lines carrying the build's
+Startup and shutdown use the global `log.Logger`; each program's start line carries the build's
 `version`. Libraries' own messages go into the same JSON log, marked with `source`.
 - Every program, first: `memory limit set` (with `memory_limit_bytes`) or `no memory limit`, at
   warn when the container's limit can't be read (`startup.LimitMemory`).
