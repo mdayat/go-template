@@ -5,7 +5,7 @@
 # refuses to build.
 # The compiler runs on the build machine's platform and cross-compiles for the target one (e.g.
 # --platform linux/amd64 from an arm64 Mac), instead of running slowly under emulation.
-FROM --platform=$BUILDPLATFORM golang:1.26.11-alpine@sha256:ecb67f987aa1a57794c91d19ade7ae0209f2f0f5496aaef9e6ae85ddf92d02ab AS build
+FROM --platform=$BUILDPLATFORM golang:1.27.4-alpine@sha256:70bd7ddea8b6cbe5d6943cde279d6b67feb10cc924fb9100d1d8757c1575b280 AS build
 ARG TARGETOS TARGETARCH
 WORKDIR /src
 COPY go.mod go.sum ./
@@ -32,14 +32,14 @@ CMD ["migrate", "apply", "--env", "deploy"]
 # One-off data commands (fixes, backfills), run by hand where the database is reachable:
 #   docker run --rm -e DATABASE_URL=... <image> <command> [--apply]
 # With no command it lists them; without --apply a run saves nothing.
-FROM gcr.io/distroless/static-debian13:nonroot@sha256:aafe993665bf6200db38a02c11a9351e782a84b6a45e7f33b6695638c88e3931 AS oneoff
+FROM gcr.io/distroless/static-debian13:nonroot@sha256:8ce6dd87e9823c5b48dcfb2c8604714ccb351ce59607327bcc4957448da279b5 AS oneoff
 COPY --from=build /out/oneoff /oneoff
 ENTRYPOINT ["/oneoff"]
 
 # remove:worker
 # The worker: runs queued jobs and queues the scheduled ones. It serves no port; run as many as the
 # jobs need.
-FROM gcr.io/distroless/static-debian13:nonroot@sha256:aafe993665bf6200db38a02c11a9351e782a84b6a45e7f33b6695638c88e3931 AS worker
+FROM gcr.io/distroless/static-debian13:nonroot@sha256:8ce6dd87e9823c5b48dcfb2c8604714ccb351ce59607327bcc4957448da279b5 AS worker
 COPY --from=build /out/worker /worker
 ENTRYPOINT ["/worker"]
 # remove:end
@@ -47,7 +47,7 @@ ENTRYPOINT ["/worker"]
 # remove:api
 # The API. Last, so a plain `docker build` builds it. No shell or package manager, and a non-root
 # user. Settings come from the environment; there is no .env in the image.
-FROM gcr.io/distroless/static-debian13:nonroot@sha256:aafe993665bf6200db38a02c11a9351e782a84b6a45e7f33b6695638c88e3931 AS app
+FROM gcr.io/distroless/static-debian13:nonroot@sha256:8ce6dd87e9823c5b48dcfb2c8604714ccb351ce59607327bcc4957448da279b5 AS app
 COPY --from=build /out/api /api
 EXPOSE 8080
 ENTRYPOINT ["/api"]
